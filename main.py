@@ -111,6 +111,7 @@ def agent(obs):
     shed = private["shed"]
     seeds = private["seeds"]
     market = []
+    hire_orders = []  # queued last (see below): least costly thing to truncate
 
     # ---- Hire hands for the day, sized to owned land ----
     if obs["hour"] == 0:
@@ -123,7 +124,7 @@ def agent(obs):
                 break
             spent += cost
             n_hire += 1
-        market.extend([["HIRE"]] * n_hire)
+        hire_orders = [["HIRE"]] * n_hire
 
     # ---- Sell shed surplus, keeping enough wheat to feed the animals ----
     placed_animals = sum(1 for _, _, t in tiles if isinstance(t, dict) and "animal" in t)
@@ -175,6 +176,13 @@ def agent(obs):
         if quadrant not in me["unlocked_quadrants"] and me["money"] >= cost * 2:
             market.append(["BUY_LAND"])
             break
+
+    # Hiring goes last: maxMarketOrdersPerTurn (10) truncates the market list,
+    # and losing a hand-hire for one day is far cheaper than losing a wheat
+    # sale or animal purchase. Replay showed a 9-hand hire burst plus a sell
+    # and two buys hit 12 orders on one turn -- with hire queued first, the
+    # sell and both buys were silently dropped.
+    market.extend(hire_orders)
 
     # ---- Build per-tile task tiers ----
     structure_to_animal = {p["structure"]: p["animal"] for p in ANIMAL_PLANS}
