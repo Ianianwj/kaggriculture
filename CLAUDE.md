@@ -28,9 +28,13 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   shop unlocks), so judge strategy changes over `--trials 20+`, not a single match.
 - Key economic levers: crop/animal choice trades off seed cost, time-to-yield, and market
   reaction (premium goods like melon/strawberry/milk/wool crash hard on gluts — stagger sells).
-- Land expansion (`BUY_LAND`, $1k/$2k/$4k) and hiring farm hands (`HIRE`, Fibonacci-priced per
-  day) both cost cash up front for more parallel actions later — timing matters more than the
-  raw ROI number.
+- Land expansion (`BUY_LAND`, $1k/$2k/$4k for NE/SW/SE) and hiring farm hands (`HIRE`,
+  Fibonacci-priced per day) both cost cash up front for more parallel actions later — timing
+  matters more than the raw ROI number. But land is only worth buying if it can actually be
+  staffed: at `MAX_HANDS=10` (11 actors x `TILES_PER_ACTOR=5` ≈ 55 tiles), NW+NE (50 tiles) is
+  already close to the ceiling, so `main.py` only buys NE and skips SW/SE — the $6000 combined
+  cost was sitting in unstaffable land instead of hands/animals/seed, capital that compounds over
+  720 turns. Replay confirmed tile utilization doesn't improve past ~2 quadrants at this actor cap.
 - Current agent (`main.py`) is a multi-tile, multi-actor wheat farm (farmer + hired hands, up to
   `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a small livestock
   operation (`ANIMAL_PLANS`: cows then geese, prioritized by $/wheat-fed) fed from its own wheat
@@ -39,8 +43,8 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   carried animal into its empty structure > build new structures > plant wheat > clear weeds.
   Wheat harvests are timed to the yield peak (day 4) rather than the first eligible day (day 2)
   since HARVEST costs one turn either way. Benchmark: 20W-0L vs both `random` and `starter` (avg
-  reward ~10,127 / ~10,316 over 20 trials) — up from ~5770 / ~5915 at the start of this round of
-  fixes (see below), ~75% higher.
+  reward ~17,450 / ~18,134 over 20 trials) — up from ~10,127 / ~10,316 after capping land expansion
+  to NE only (see below), and from ~5770 / ~5915 at the start of this round of fixes.
 - Confirmed against the installed `kaggle_environments` source (not just the README, which was
   ambiguous here): FEED and PLACE consume from the *acting unit's own inventory*, not the shared
   shed, so animals/wheat must be PICKUP'd from the shed before use. BUILD_COOP/BUILD_PASTURE cost
@@ -63,11 +67,11 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   turned it into the single biggest win of the session. Lesson: when a plausible feature
   regresses, suspect an interacting bug before concluding the feature itself is bad — a replay
   dump answered it in minutes.
-- Not yet using: land expansion beyond the opportunistic `BUY_LAND` check, fertilizer for crops,
-  sheep, or other crops (carrot/tomato/melon). Since we're winning cleanly against both local
-  baselines, further layers should be validated the same way this round was — replay-inspected,
-  not just win/loss — since the real leaderboard (thousands of tuned competitor bots) is a much
-  higher bar than these two fixed baselines.
+- Not yet using: SW/SE land (deliberately, see above — revisit if `MAX_HANDS` or
+  `TILES_PER_ACTOR` change), fertilizer for crops, sheep, or other crops (carrot/tomato/melon).
+  Since we're winning cleanly against both local baselines, further layers should be validated the
+  same way this round was — replay-inspected, not just win/loss — since the real leaderboard
+  (thousands of tuned competitor bots) is a much higher bar than these two fixed baselines.
 
 ## Testing before submitting
 

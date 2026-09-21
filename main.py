@@ -33,7 +33,12 @@ workflow.
 
 WHEAT_SEED_COST = 10
 WHEAT_MAX_YIELD_DAY = 4
-LAND_COSTS = {"NE": 1000, "SW": 2000, "SE": 4000}
+# Only NE is bought: MAX_HANDS=10 caps us at 11 actors, which at
+# TILES_PER_ACTOR=5 can realistically staff ~55 tiles -- almost exactly
+# NW+NE (50). SW/SE would cost $6000 combined for land we can't staff any
+# better than what we already have, per replay (tile utilization doesn't
+# improve past ~2 quadrants at this actor cap).
+LAND_COSTS = {"NE": 1000}
 CASH_RESERVE = 50
 MAX_SEED_STOCKPILE = 30
 # Hire cost is Fibonacci per hand per day (1,1,2,3,5,8,13,21,34,55,89,144...).
