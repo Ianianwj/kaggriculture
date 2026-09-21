@@ -83,7 +83,7 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   (thousands of tuned competitor bots) is a much higher bar than these two fixed baselines.
 - **Tried and reverted: spending fertilizer on wheat.** Engine confirms `FERTILIZE` raises wheat's
   max yield 4→6 (worth doing), and it's free — collected off animals via `COLLECT_FERTILIZER`
-  (already implemented as an idle-time bonus action, tier 9). But adding a tier to actually spend
+  (already implemented as an idle-time bonus action, tier 8). But adding a tier to actually spend
   it on wheat moved the benchmark by less than trial-to-trial noise (~21,600/~21,600 either way
   over 40 trials, vs. ~21,421/~21,900 without it). Replayed a full 720-turn game to find out why
   instead of guessing: only 3 `COLLECT_FERTILIZER` calls and **zero** `FERTILIZE` calls fired in

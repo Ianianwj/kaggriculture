@@ -61,6 +61,11 @@ ANIMAL_PLANS = [
     {"animal": "GOOSE", "structure": "COOP", "cost": 300, "target": 4},
 ]
 BUILD_OP = {"PASTURE": "BUILD_PASTURE", "COOP": "BUILD_COOP"}
+# Animals sit in the shed (via BUY_ANIMAL) awaiting PICKUP+PLACE just like any
+# other shed item, but the engine's SELL only accepts real products -- a
+# SELL order for one of these is a silent no-op that still burns one of the
+# 10 market-order slots for the turn. Keep them out of the shed-surplus loop.
+ANIMAL_NAMES = {p["animal"] for p in ANIMAL_PLANS}
 
 
 def _fib_hire_cost(n):
@@ -116,24 +121,15 @@ def agent(obs):
     shed = private["shed"]
     seeds = private["seeds"]
     market = []
-    hire_orders = []  # queued last (see below): least costly thing to truncate
-
-    # ---- Hire hands for the day, sized to owned land ----
-    if obs["hour"] == 0:
-        desired_hands = min(MAX_HANDS, max(0, len(tiles) // TILES_PER_ACTOR - 1))
-        budget = me["money"] - CASH_RESERVE
-        n_hire, spent = 0, 0
-        while n_hire < desired_hands:
-            cost = _fib_hire_cost(n_hire)
-            if spent + cost > budget:
-                break
-            spent += cost
-            n_hire += 1
-        hire_orders = [["HIRE"]] * n_hire
 
     # ---- Sell shed surplus, keeping enough wheat to feed the animals ----
+    # Animals awaiting PICKUP+PLACE also sit in the shed; excluded here since
+    # the engine's SELL silently no-ops on a non-product item but still
+    # burns one of the turn's 10 market-order slots getting there.
     placed_animals = sum(1 for _, _, t in tiles if isinstance(t, dict) and "animal" in t)
     for item, count in shed.items():
+        if item in ANIMAL_NAMES:
+            continue
         sellable = max(0, count - placed_animals) if item == "WHEAT" else count
         if sellable > 0:
             market.append(["SELL", item, sellable])
@@ -151,10 +147,19 @@ def agent(obs):
         build_targets.extend((x, y, BUILD_OP[plan["structure"]]) for x, y in claimed)
     plant_targets = empty_by_dist
 
+    # ---- Shared cash pool for everything this turn spends. Seed, animal,
+    # land and hire orders are appended to `market` in that order (hire
+    # last, see below) and the engine executes a turn's orders strictly in
+    # that list order, deducting real money as each one commits -- so each
+    # section below must decrement the SAME running `available` the next
+    # section reads, not a separate, non-decremented copy of it (that used
+    # to let hire-sizing plan against cash seed/animal/land purchases were
+    # about to spend first, silently under-hiring on big-purchase turns).
+    available = me["money"] - CASH_RESERVE
+
     # ---- Keep enough wheat seed for every tile we intend to plant ----
     seeds_owned = seeds.get("WHEAT", 0)
     target_seeds = min(len(plant_targets), MAX_SEED_STOCKPILE)
-    available = me["money"] - CASH_RESERVE
     to_buy = max(0, min(target_seeds - seeds_owned, available // WHEAT_SEED_COST))
     if to_buy > 0:
         market.append(["BUY_SEED", "WHEAT", to_buy])
@@ -180,7 +185,22 @@ def agent(obs):
     for quadrant, cost in LAND_COSTS.items():
         if quadrant not in me["unlocked_quadrants"] and me["money"] >= cost * 2:
             market.append(["BUY_LAND"])
+            available -= cost
             break
+
+    # ---- Hire hands for the day, sized to owned land and whatever cash the
+    # sections above haven't already claimed ----
+    hire_orders = []
+    if obs["hour"] == 0:
+        desired_hands = min(MAX_HANDS, max(0, len(tiles) // TILES_PER_ACTOR - 1))
+        n_hire, spent = 0, 0
+        while n_hire < desired_hands:
+            cost = _fib_hire_cost(n_hire)
+            if spent + cost > available:
+                break
+            spent += cost
+            n_hire += 1
+        hire_orders = [["HIRE"] for _ in range(n_hire)]
 
     # Hiring goes last: maxMarketOrdersPerTurn (10) truncates the market list,
     # and losing a hand-hire for one day is far cheaper than losing a wheat
@@ -262,10 +282,23 @@ def agent(obs):
     has_wheat = lambda ai, t: inventories[ai].get("WHEAT", 0) > 0
     unfed_left = assign(feed_targets, lambda ai, t: ["FEED"], feasible=has_wheat)
     if unfed_left and shed.get("WHEAT", 0) > 0:
-        n = min(len(unfed_left), shed["WHEAT"])
+        # A single actor's inventory can carry the whole shortfall in one
+        # trip, then deliver it across several later turns -- so cap this to
+        # one fetcher via the shared budget below. Without the feasible gate,
+        # assign() can match every actor already standing on a distinct
+        # shed-access tile this same turn, and each would get handed the
+        # unshared, un-decremented `n`, over-fetching wheat the just-queued
+        # SELL WHEAT order above was counting on.
+        fetch_budget = [min(len(unfed_left), shed["WHEAT"])]
+
+        def pickup_wheat(ai, t):
+            n, fetch_budget[0] = fetch_budget[0], 0
+            return ["PICKUP", "WHEAT", n]
+
         assign(
             _shed_access_tiles(board_size),
-            lambda ai, t: ["PICKUP", "WHEAT", n],
+            pickup_wheat,
+            feasible=lambda ai, t: fetch_budget[0] > 0,
         )
 
     # 2. Harvest ripe crops and animal products -- banks cash and frees the
@@ -279,9 +312,31 @@ def agent(obs):
     #    carrying one yet, send an idle actor to the shed to pick one up.
     has_animal = lambda ai, t: inventories[ai].get(t[2], 0) > 0
     unplaced_left = assign(place_targets, lambda ai, t: ["PLACE", t[2]], feasible=has_animal)
+    # Unlike wheat above, each empty structure needs its OWN actor carrying
+    # its OWN animal (PLACE consumes exactly 1), so multiple simultaneous
+    # fetchers per animal type are genuinely useful here -- but must be
+    # capped at actual shed stock. Without the shared, decrementing budget,
+    # two empty structures wanting the same animal each triggered their own
+    # assign() call reading the same un-decremented shed count, so with only
+    # 1 in stock both could dispatch a fetcher; the second's PICKUP silently
+    # caps at 0 in the engine, wasting that actor's whole turn.
+    needed_by_animal = {}
     for _, _, animal in unplaced_left:
-        if shed.get(animal, 0) > 0:
-            assign(_shed_access_tiles(board_size), lambda ai, t, animal=animal: ["PICKUP", animal, 1])
+        needed_by_animal[animal] = needed_by_animal.get(animal, 0) + 1
+    for animal, needed in needed_by_animal.items():
+        budget = [min(needed, shed.get(animal, 0))]
+        if budget[0] <= 0:
+            continue
+
+        def pickup_animal(ai, t, animal=animal, budget=budget):
+            budget[0] -= 1
+            return ["PICKUP", animal, 1]
+
+        assign(
+            _shed_access_tiles(board_size),
+            pickup_animal,
+            feasible=lambda ai, t, budget=budget: budget[0] > 0,
+        )
 
     # 5. Build new structures on reserved land.
     assign(build_targets, lambda ai, t: [t[2]])
