@@ -31,8 +31,15 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
 - Land expansion (`BUY_LAND`, $1k/$2k/$4k) and hiring farm hands (`HIRE`, Fibonacci-priced per
   day) both cost cash up front for more parallel actions later — timing matters more than the
   raw ROI number.
-- Current agent (`main.py`) is a single-farmer wheat-loop baseline. Not yet using hands,
-  animals, fertilizer, or multi-crop rotation — those are the next strategy layers to add.
+- Current agent (`main.py`) is a single-farmer, multi-tile wheat farm: it works every owned
+  tile (not just one), prioritizing harvest > water > expand, and times harvests to wheat's
+  yield peak (day 4) instead of the first eligible day (day 2) since HARVEST costs one turn
+  either way. Benchmark: 20W-0L vs `random` (avg reward ~5010), 16W-4L vs `starter` (avg
+  reward ~4828), each over 20 trials.
+- Not yet using: hired hands (more parallel actions/turn), land expansion beyond the opportunistic
+  BUY_LAND check, fertilizer, other crops, or animals. Hands are probably the next highest-leverage
+  layer now that the starting quadrant is fully utilized — a second/third actor multiplies
+  everything the tile-scheduling logic already does.
 
 ## Testing before submitting
 
