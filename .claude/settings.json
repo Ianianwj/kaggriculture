@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(py *)",
+      "Bash(pytest*)",
+      "Bash(pip install*)",
+      "Bash(pip freeze*)",
+      "Bash(pip list*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git show*)",
+      "Bash(kaggle competitions submit*)",
+      "Bash(kaggle competitions list*)",
+      "Bash(kaggle competitions submissions*)",
+      "Bash(kaggle competitions episodes*)",
+      "Bash(kaggle competitions replay*)",
+      "Bash(kaggle competitions logs*)",
+      "Bash(kaggle competitions leaderboard*)",
+      "Bash(kaggle competitions pages*)"
+    ]
+  }
+}
