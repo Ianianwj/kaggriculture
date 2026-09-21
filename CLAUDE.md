@@ -43,16 +43,18 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   carried animal into its empty structure > build new structures > plant wheat > clear weeds.
   Wheat harvests are timed to the yield peak (day 4) rather than the first eligible day (day 2)
   since HARVEST costs one turn either way. Benchmark: 20W-0L vs both `random` and `starter` (avg
-  reward ~17,450 / ~18,134 over 20 trials) — up from ~10,127 / ~10,316 after capping land expansion
-  to NE only (see below), and from ~5770 / ~5915 at the start of this round of fixes.
+  reward ~21,421 / ~21,900 over 20 trials) — up from ~17,450 / ~18,134 after fixing the day-4
+  watering bug (see below), ~10,127 / ~10,316 after capping land expansion to NE only, and
+  ~5770 / ~5915 at the start of this round of fixes.
 - Confirmed against the installed `kaggle_environments` source (not just the README, which was
   ambiguous here): FEED and PLACE consume from the *acting unit's own inventory*, not the shared
   shed, so animals/wheat must be PICKUP'd from the shed before use. BUILD_COOP/BUILD_PASTURE cost
   zero gold, only one action turn.
-- **Three real bugs found via replay analysis, not just tuning** (dump one with
-  `run_match.py <opp> --replay out.json` and inspect money/tile-state over time — local win/loss
-  against weak baselines does NOT surface these, since the baselines are weak enough to lose
-  even to a buggy agent):
+- **Four real bugs found so far, not just tuning** (three via replay analysis — dump one with
+  `run_match.py <opp> --replay out.json` and inspect money/tile-state over time — and one by
+  diffing the agent's own logic against the installed engine source; local win/loss against weak
+  baselines does NOT surface these, since the baselines are weak enough to lose even to a buggy
+  agent):
   1. Priority order had HARVEST before FEED, so any actor holding wheat from a harvest got
      redrafted into the next harvest before ever delivering it to a hungry animal — animals
      starved and escaped in cycles, repeatedly burning their full purchase cost. Fix: feed first.
@@ -62,16 +64,26 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   3. `MAX_HANDS` was capped at 4 (right for the 25-tile starting quadrant) but land expansion
      grows to 100 tiles — actor count never scaled up, leaving 40-60 tiles idle late-game. Fix:
      raise the cap based on hire-cost economics (Fibonacci cost vs. ~$90-100/day value per hand).
-  A first attempt at adding cows (before these fixes existed) looked like a clean regression in
+  4. The per-tile tier classification sent a wheat plant straight to `harvest_targets` the instant
+     `age >= WHEAT_MAX_YIELD_DAY`, so it was never watered on day 4 itself — even though the
+     engine's own watering-bonus window (`window_start <= age <= max_yield_day`) is inclusive of
+     that day. Cost 1 of 4 possible yield units on *every single wheat cycle*, tile, all game —
+     the single highest-leverage bug found, worth ~20% avg reward on its own. Fix: only route to
+     harvest once watered today (or once the window has fully passed).
+  A first attempt at adding cows (before bugs 1-3 were fixed) looked like a clean regression in
   isolated A/B testing and was reverted; retrying the *identical* idea after fixing bugs 1-3
-  turned it into the single biggest win of the session. Lesson: when a plausible feature
+  turned it into the single biggest win of that session. Lesson: when a plausible feature
   regresses, suspect an interacting bug before concluding the feature itself is bad — a replay
-  dump answered it in minutes.
+  dump (or, per bug 4, just re-reading the engine source next to the agent's own logic) can answer
+  it in minutes.
 - Not yet using: SW/SE land (deliberately, see above — revisit if `MAX_HANDS` or
-  `TILES_PER_ACTOR` change), fertilizer for crops, sheep, or other crops (carrot/tomato/melon).
-  Since we're winning cleanly against both local baselines, further layers should be validated the
-  same way this round was — replay-inspected, not just win/loss — since the real leaderboard
-  (thousands of tuned competitor bots) is a much higher bar than these two fixed baselines.
+  `TILES_PER_ACTOR` change), fertilizer for crops (engine confirms it raises wheat's max yield
+  4→6 and is obtainable free as an animal byproduct via `COLLECT_FERTILIZER`, which the agent
+  already collects opportunistically but never spends — a candidate next step), sheep, or other
+  crops (carrot/tomato/melon). Since we're winning cleanly against both local baselines, further
+  layers should be validated the same way this round was — replay-inspected, not just win/loss —
+  since the real leaderboard (thousands of tuned competitor bots) is a much higher bar than these
+  two fixed baselines.
 
 ## Testing before submitting
 

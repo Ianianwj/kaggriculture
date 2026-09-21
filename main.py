@@ -196,9 +196,17 @@ def agent(obs):
         if isinstance(tile, dict):
             if tile.get("kind") == "PLANT":
                 age = obs["day"] - tile["planted_day"]
-                if tile["yield_units"] > 0 and age >= WHEAT_MAX_YIELD_DAY:
+                # The watering bonus window is inclusive of WHEAT_MAX_YIELD_DAY
+                # itself (engine: window_start <= age <= max_yield_day), so a
+                # plant at exactly that age still needs watering today before
+                # harvest -- skipping straight to harvest here silently drops
+                # one yield unit (of 4) on every single wheat cycle.
+                if tile["yield_units"] > 0 and (
+                    age > WHEAT_MAX_YIELD_DAY
+                    or (age == WHEAT_MAX_YIELD_DAY and tile["watered_today"])
+                ):
                     harvest_targets.append((x, y))
-                elif not tile["watered_today"]:
+                elif not tile["watered_today"] and age <= WHEAT_MAX_YIELD_DAY:
                     water_targets.append((x, y))
             elif "animal" in tile:
                 if tile["yield_units"] > 0:
