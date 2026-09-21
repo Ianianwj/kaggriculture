@@ -27,7 +27,13 @@ WHEAT_MAX_YIELD_DAY = 4
 LAND_COSTS = {"NE": 1000, "SW": 2000, "SE": 4000}
 CASH_RESERVE = 50
 MAX_SEED_STOCKPILE = 30
-MAX_HANDS = 4
+# Hire cost is Fibonacci per hand per day (1,1,2,3,5,8,13,21,34,55,89,144...).
+# A hand tending ~TILES_PER_ACTOR wheat tiles is worth roughly $90-100/day
+# gross, so the 11th hand (cost 144) is the first one that's a net loss --
+# cap just below that. Replay analysis showed the old cap of 4 left 40-60
+# of 100 owned tiles idle once all land was bought, since actor count never
+# scaled past the starting quadrant's needs.
+MAX_HANDS = 10
 TILES_PER_ACTOR = 5
 GOOSE_COST = 300
 GOOSE_TARGET = 4
