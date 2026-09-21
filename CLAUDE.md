@@ -31,17 +31,25 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
 - Land expansion (`BUY_LAND`, $1k/$2k/$4k) and hiring farm hands (`HIRE`, Fibonacci-priced per
   day) both cost cash up front for more parallel actions later — timing matters more than the
   raw ROI number.
-- Current agent (`main.py`) is a multi-tile, multi-actor wheat farm: the farmer plus a batch of
-  hired hands (re-hired daily, sized to owned tile count, up to `MAX_HANDS`) are each greedily
-  matched to the nearest tile needing harvest > water > planting, and harvests are timed to
-  wheat's yield peak (day 4) instead of the first eligible day (day 2) since HARVEST costs one
-  turn either way. Benchmark: 20W-0L vs both `random` and `starter` (avg reward ~5320 / ~5207),
-  each over 20 trials.
+- Current agent (`main.py`) is a multi-tile, multi-actor wheat farm (farmer + hired hands, up to
+  `MAX_HANDS`, re-hired daily and sized to owned tile count) that also runs a small goose
+  operation (`GOOSE_TARGET` coops) fed from its own wheat surplus. Every unit is greedily matched
+  to the nearest task: harvest (crops + animal product) > feed unfed geese > water thirsty wheat >
+  place a carried goose into an empty coop > build new coops > plant wheat on the rest of the
+  land, with idle leftover actors opportunistically CARE-ing for / collecting fertilizer from fed
+  geese. Wheat harvests are timed to the yield peak (day 4) rather than the first eligible day
+  (day 2) since HARVEST costs one turn either way. Benchmark: 20W-0L vs both `random` and
+  `starter` (avg reward ~5770 / ~5915), each over 20 trials — up from ~5320 / ~5207 before geese.
+- Confirmed against the installed `kaggle_environments` source (not just the README, which was
+  ambiguous here): FEED and PLACE consume from the *acting unit's own inventory*, not the shared
+  shed, so geese/wheat must be PICKUP'd from the shed before use. BUILD_COOP/BUILD_PASTURE cost
+  zero gold, only one action turn.
 - Not yet using: land expansion beyond the opportunistic BUY_LAND check (still just the starting
-  NW quadrant), fertilizer, other crops (carrot/tomato/melon), or animals (goose/cow/sheep).
-  Since we're now winning cleanly against both baselines, further layers should be benchmarked
-  against each other, not just against `starter` — e.g. save agent versions and pit them head to
-  head via `env.run([agentA, agentB])` before assuming an "improvement" actually is one.
+  NW quadrant), fertilizer for crops, other crops (carrot/tomato/melon), cow/sheep, or weed
+  clearing (DIG) — a weed-spawned tile is currently just lost. Since we're now winning cleanly
+  against both baselines, further layers should be benchmarked against each other head-to-head
+  (`env.run([agentA, agentB])`), not just against `starter`, since both baselines may be weak
+  relative to real competitors.
 
 ## Testing before submitting
 
