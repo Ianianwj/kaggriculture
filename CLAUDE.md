@@ -77,13 +77,23 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   dump (or, per bug 4, just re-reading the engine source next to the agent's own logic) can answer
   it in minutes.
 - Not yet using: SW/SE land (deliberately, see above — revisit if `MAX_HANDS` or
-  `TILES_PER_ACTOR` change), fertilizer for crops (engine confirms it raises wheat's max yield
-  4→6 and is obtainable free as an animal byproduct via `COLLECT_FERTILIZER`, which the agent
-  already collects opportunistically but never spends — a candidate next step), sheep, or other
-  crops (carrot/tomato/melon). Since we're winning cleanly against both local baselines, further
-  layers should be validated the same way this round was — replay-inspected, not just win/loss —
-  since the real leaderboard (thousands of tuned competitor bots) is a much higher bar than these
-  two fixed baselines.
+  `TILES_PER_ACTOR` change), fertilizer for crops, sheep, or other crops (carrot/tomato/melon).
+  Since we're winning cleanly against both local baselines, further layers should be validated the
+  same way this round was — replay-inspected, not just win/loss — since the real leaderboard
+  (thousands of tuned competitor bots) is a much higher bar than these two fixed baselines.
+- **Tried and reverted: spending fertilizer on wheat.** Engine confirms `FERTILIZE` raises wheat's
+  max yield 4→6 (worth doing), and it's free — collected off animals via `COLLECT_FERTILIZER`
+  (already implemented as an idle-time bonus action, tier 9). But adding a tier to actually spend
+  it on wheat moved the benchmark by less than trial-to-trial noise (~21,600/~21,600 either way
+  over 40 trials, vs. ~21,421/~21,900 without it). Replayed a full 720-turn game to find out why
+  instead of guessing: only 3 `COLLECT_FERTILIZER` calls and **zero** `FERTILIZE` calls fired in
+  the whole game. Root cause: collection is gated on an actor being *fully idle* standing on the
+  animal's own tile, which with ~9 hands covering ~50 tiles almost never happens — there's always
+  a higher-priority task. The fertilizer-spending logic itself was never wrong, it just never had
+  any fertilizer to spend. Reverted rather than keep dead code. To make this lever real, collection
+  would need its own routed tier (like weeds/DIG) instead of riding on leftover idle time, and that
+  routing cost (actor-turns diverted from tending ~50 wheat tiles) needs its own A/B test before
+  assuming it's a net win.
 
 ## Testing before submitting
 
