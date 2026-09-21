@@ -125,13 +125,19 @@ def agent(obs):
     if to_buy > 0:
         market.append(["BUY_SEED", "WHEAT", to_buy])
 
-    # ---- Buy geese up to target ----
+    # ---- Buy geese up to target, once wheat is actually flowing ----
+    # Wheat harvests are deliberately delayed until WHEAT_MAX_YIELD_DAY (see
+    # below), so a goose bought before then has no feed source at all and is
+    # guaranteed to starve and escape within its first 2 days -- burning the
+    # full purchase cost for nothing. Confirmed via replay: geese bought on
+    # day 0 died by day 2-3 every time before this gate was added.
     geese_total = (
         shed.get("GOOSE", 0)
         + sum(inv.get("GOOSE", 0) for inv in inventories)
         + placed_geese
     )
-    if geese_total < GOOSE_TARGET and me["money"] - CASH_RESERVE >= GOOSE_COST:
+    wheat_flowing = obs["day"] > WHEAT_MAX_YIELD_DAY
+    if wheat_flowing and geese_total < GOOSE_TARGET and me["money"] - CASH_RESERVE >= GOOSE_COST:
         market.append(["BUY_ANIMAL", "GOOSE", 1])
 
     # ---- Expand land once comfortably affordable ----
@@ -190,13 +196,15 @@ def agent(obs):
             remaining.remove(t)
         return remaining
 
-    # 1. Harvest ripe crops and animal products -- highest priority, banks
-    #    cash and frees the tile for the next cycle.
-    assign(harvest_targets, lambda ai, t: ["HARVEST"])
-
-    # 2. Feed unfed geese. Only actors already carrying wheat can act (from
-    #    a recent harvest or an earlier pickup); leftover unfed geese get an
-    #    idle actor sent to fetch wheat from the shed for a future turn.
+    # 1. Feed unfed geese first -- losing a goose (2 consecutive unfed days)
+    #    wastes its full purchase cost and days of lost production, which
+    #    costs far more than delaying a harvest by one turn. Only actors
+    #    already carrying wheat (from a recent harvest or earlier pickup)
+    #    can act immediately; if this tier ran after harvest instead, a
+    #    wheat-carrying actor would get redrafted into the next harvest
+    #    before ever delivering it, which is exactly how geese starved in
+    #    testing. Leftover unfed geese get an idle actor sent to fetch
+    #    wheat from the shed for a future turn.
     has_wheat = lambda ai, t: inventories[ai].get("WHEAT", 0) > 0
     unfed_left = assign(feed_targets, lambda ai, t: ["FEED"], feasible=has_wheat)
     if unfed_left and shed.get("WHEAT", 0) > 0:
@@ -205,6 +213,10 @@ def agent(obs):
             _shed_access_tiles(board_size),
             lambda ai, t: ["PICKUP", "WHEAT", n],
         )
+
+    # 2. Harvest ripe crops and animal products -- banks cash and frees the
+    #    tile for the next cycle.
+    assign(harvest_targets, lambda ai, t: ["HARVEST"])
 
     # 3. Water thirsty wheat -- avoid weeds.
     assign(water_targets, lambda ai, t: ["WATER"])
