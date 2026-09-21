@@ -31,15 +31,17 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
 - Land expansion (`BUY_LAND`, $1k/$2k/$4k) and hiring farm hands (`HIRE`, Fibonacci-priced per
   day) both cost cash up front for more parallel actions later — timing matters more than the
   raw ROI number.
-- Current agent (`main.py`) is a single-farmer, multi-tile wheat farm: it works every owned
-  tile (not just one), prioritizing harvest > water > expand, and times harvests to wheat's
-  yield peak (day 4) instead of the first eligible day (day 2) since HARVEST costs one turn
-  either way. Benchmark: 20W-0L vs `random` (avg reward ~5010), 16W-4L vs `starter` (avg
-  reward ~4828), each over 20 trials.
-- Not yet using: hired hands (more parallel actions/turn), land expansion beyond the opportunistic
-  BUY_LAND check, fertilizer, other crops, or animals. Hands are probably the next highest-leverage
-  layer now that the starting quadrant is fully utilized — a second/third actor multiplies
-  everything the tile-scheduling logic already does.
+- Current agent (`main.py`) is a multi-tile, multi-actor wheat farm: the farmer plus a batch of
+  hired hands (re-hired daily, sized to owned tile count, up to `MAX_HANDS`) are each greedily
+  matched to the nearest tile needing harvest > water > planting, and harvests are timed to
+  wheat's yield peak (day 4) instead of the first eligible day (day 2) since HARVEST costs one
+  turn either way. Benchmark: 20W-0L vs both `random` and `starter` (avg reward ~5320 / ~5207),
+  each over 20 trials.
+- Not yet using: land expansion beyond the opportunistic BUY_LAND check (still just the starting
+  NW quadrant), fertilizer, other crops (carrot/tomato/melon), or animals (goose/cow/sheep).
+  Since we're now winning cleanly against both baselines, further layers should be benchmarked
+  against each other, not just against `starter` — e.g. save agent versions and pit them head to
+  head via `env.run([agentA, agentB])` before assuming an "improvement" actually is one.
 
 ## Testing before submitting
 
