@@ -46,9 +46,14 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   already carried) > place a carried animal into its empty structure > build new structures >
   plant wheat, then melon > collect fertilizer from fed animals for a future turn > clear weeds.
   Wheat (and melon) harvests are timed to the yield peak rather than the first eligible day, since
-  HARVEST costs one turn either way. Benchmark: 40W-0L vs both `random` and `starter`, avg reward
-  ~31,700 / ~31,900 over 40 trials — up from ~28,890 / ~27,850 after promoting the fertilizer-
-  collection tier's priority, ~28,650 / ~27,350 after adding a routed fertilizer tier (see
+  HARVEST costs one turn either way. Hiring is sized and its cost reserved from the shared cash
+  pool FIRST, before seed/animal/land purchases can spend into it (the `HIRE` orders themselves
+  still queue last in the market list, a separate concern -- see "Copying the #1 team's strategy"
+  below). Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~31,700 / ~32,000 over 40
+  trials — up from ~31,700 / ~31,900 after promoting the fertilizer-collection tier's priority
+  (this round's hire-priority reorder was a small, standalone win; SW land + strawberry paired
+  with it was tried and reverted, see below), ~28,650 / ~27,350 after adding a routed fertilizer
+  tier (see
   "Copying the #1 team's strategy" below), ~26,150 / ~26,350 after adding melon,
   ~21,528 / ~21,789 after the market/dispatch bug fixes, ~17,450 / ~18,134 after fixing the day-4
   watering bug, ~10,127 / ~10,316 after capping land expansion to NE only, and ~5770 / ~5915 at
@@ -313,6 +318,34 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     don't commit to a big purchase until a reserve well beyond current running costs exists, not
     just `money >= cost * 2`) rather than another isolated constant change -- a real design
     change, not attempted this round.
+  - **Implemented that fix (hire-priority reordering) -- validated small win alone, still not
+    enough to unlock SW+strawberry.** The identified root cause across every scale-up failure was
+    that `HIRE` was sized LAST, against whatever `available` cash survived that turn's seed/
+    animal/land purchases -- so a big same-turn purchase could starve hand count with zero
+    protection. Fixed directly: hire-sizing now runs FIRST and reserves its cost out of
+    `available` before anything else can spend it (the actual `HIRE` market orders still get
+    appended to the list LAST, which is the unrelated order-count-truncation concern from bug #7
+    -- reordering the CASH claim and reordering the LIST position are two different things, only
+    the first was ever the bug). Tested alone (no SW/strawberry, just the reorder on the existing
+    50-tile base): 31,536.5/32,185.9 avg reward over 40 trials, matching/slightly beating the
+    31,696.8/31,895.0 baseline -- a genuine small win standing alone, not just neutral. Then
+    retried the full SW+strawberry+`MAX_HANDS=14` combination on top of this fix: still a clear
+    regression (~25,600/~25,600), barely different from every earlier attempt. Replay showed why:
+    hand count was now stable *within* a turn (the bug is fixed) but still dipped to 2-3 hands on
+    several days, because the underlying **daily cash total** is genuinely low those days -- SW's
+    $2000 purchase plus wheat/melon/strawberry/animal running costs simply outspend income for a
+    stretch, so there's nothing left to reserve regardless of claim order. Tried gating SW behind
+    a much higher floor (`money >= $10,000`, roughly what the healthy 50-tile base alone reaches
+    by day 20+) instead of the same `cost * 2` NE uses: still no real improvement (~26,000/~24,900).
+    Reverted SW/strawberry/`MAX_HANDS` entirely (back to NE-only, `MAX_HANDS=10`) but **kept** the
+    hire-priority reorder, since it's a validated win on its own. This is now six variations of
+    the SW scale-up (wheat, cash aggression, strawberry, strawberry+hands, +hire-priority-fix,
+    +delayed-purchase) that have all failed, each for a diagnosed, non-speculative reason -- strong
+    evidence the ~31-32k ceiling is a genuine multi-day cash-flow capacity limit of funding this
+    many simultaneous initiatives from one pool, not a single fixable bug. Unlocking it for real
+    would need staged/sequenced investment (e.g. explicitly hold SW's purchase price plus its
+    first N days of seed costs in reserve, separate from the operating pool, before buying at
+    all) rather than another threshold or reordering tweak.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is

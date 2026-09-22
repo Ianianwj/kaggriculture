@@ -36,6 +36,16 @@ BUILD_COOP/BUILD_PASTURE cost zero gold, only one action.
 
 Harvests are timed to wheat's yield peak (day 4) rather than the first
 eligible day (day 2), since HARVEST costs the same one turn either way.
+
+Hiring is sized and its cost reserved from the shared cash pool FIRST,
+before any seed/animal/land purchase gets a chance to spend into it (the
+actual HIRE orders still queue last in the market list -- a separate,
+order-count-truncation concern, not a cash-priority one). A repeated
+failure mode across several scale-up experiments (see CLAUDE.md "Copying
+the #1 team's strategy") traced back to sizing hire last against whatever
+cash survived other purchases, letting a big same-turn buy crash hand
+count with no protection.
+
 See AGENTS.md / README.md for full rules and CLAUDE.md for the testing
 workflow.
 """
@@ -48,18 +58,16 @@ WHEAT_MAX_YIELD_DAY = 4
 # better than what we already have, per replay (tile utilization doesn't
 # improve past ~2 quadrants at this actor cap).
 #
-# Tried buying SW in isolation, as the first step of copying the #1
-# leaderboard team's strategy (see CLAUDE.md): confirmed via replay this
-# alone is a regression (weeds climbing 3->26 tiles by day 29) because
-# MAX_HANDS=10 was tuned for ~5 tiles/actor on 50 tiles, and hiring enough
-# more hands to hold that ratio on 75 is uneconomical -- the 14th hand
-# would cost $377/day (Fibonacci) against a hand's ~$90-100/day value. The
-# #1 team affords MORE land with FEWER hands (8 for 75 tiles) specifically
-# because their ongoing crops (strawberry, tomato -- see CROP_DATA) need
-# less attention per tile than a continuously-replanted wheat monoculture.
-# So land expansion only pays off together with those less actor-intensive
-# crops, not before them -- reordered the plan to validate crop
-# diversification on the existing 50-tile base first.
+# Tried buying SW several ways -- routed to wheat, to a dedicated
+# strawberry batch, with more hands, with hire's cost reserved first, with
+# SW gated behind a much higher cash floor -- all regressed (see CLAUDE.md
+# "Copying the #1 team's strategy" for the full six-attempt diagnosis).
+# The bottleneck is fundamentally economic: funding land + 3 crops +
+# animals from one shared cash pool during the establishment period
+# outspends what the base economy generates, and no reordering or
+# threshold tweak fixes a genuinely over-committed budget. Left at NE-only
+# until a real fix (staged/sequenced investment, not a bigger threshold)
+# is attempted.
 LAND_COSTS = {"NE": 1000}
 # Tried dropping this to 5 (matching the #1 team's own near-$0 daily
 # balances -- see CLAUDE.md "Copying the #1 team's strategy") and it was a
@@ -90,6 +98,7 @@ MELON_SEED_COST = 80
 MELON_MAX_YIELD_DAY = 12
 MELON_TARGET = 6
 MELON_LAST_PLANT_DAY = 7
+
 # Hire cost is Fibonacci per hand per day (1,1,2,3,5,8,13,21,34,55,89,144...).
 # A hand tending ~TILES_PER_ACTOR wheat tiles is worth roughly $90-100/day
 # gross, so the 11th hand (cost 144) is the first one that's a net loss --
@@ -255,15 +264,36 @@ def agent(obs):
     melon_targets, empty_by_dist = empty_by_dist[:melon_slots], empty_by_dist[melon_slots:]
     plant_targets = empty_by_dist
 
-    # ---- Shared cash pool for everything this turn spends. Seed, animal,
-    # land and hire orders are appended to `market` in that order (hire
-    # last, see below) and the engine executes a turn's orders strictly in
-    # that list order, deducting real money as each one commits -- so each
-    # section below must decrement the SAME running `available` the next
-    # section reads, not a separate, non-decremented copy of it (that used
-    # to let hire-sizing plan against cash seed/animal/land purchases were
-    # about to spend first, silently under-hiring on big-purchase turns).
+    # ---- Shared cash pool for everything this turn spends. Each section
+    # below must decrement the SAME running `available` the next section
+    # reads, not a separate, non-decremented copy of it.
     available = me["money"] - CASH_RESERVE
+
+    # ---- Hire hands for the day FIRST, reserving their cost out of
+    # `available` before seed/animal/land purchases get a chance to spend
+    # it -- the actual HIRE orders are still appended to `market` LAST (see
+    # below), which is a separate concern (maxMarketOrdersPerTurn (10)
+    # truncates the raw order LIST, so losing a hire for one day there is
+    # cheaper than losing a sell/buy). This fixes a repeated failure mode
+    # (see CLAUDE.md "Copying the #1 team's strategy"): sizing hire against
+    # whatever cash survived other purchases meant a big same-turn land or
+    # seed purchase could crash hand count for the day with no warning --
+    # confirmed via replay in both the cash-aggression and SW+strawberry
+    # scale-up attempts, where hand count fell to 0-3 on turns big
+    # purchases landed. Reserving hire's cost first makes hand count stable
+    # regardless of what else this turn wants to spend on.
+    hire_orders = []
+    if obs["hour"] == 0:
+        desired_hands = min(MAX_HANDS, max(0, len(tiles) // TILES_PER_ACTOR - 1))
+        n_hire, spent = 0, 0
+        while n_hire < desired_hands:
+            cost = _fib_hire_cost(n_hire)
+            if spent + cost > available:
+                break
+            spent += cost
+            n_hire += 1
+        hire_orders = [["HIRE"] for _ in range(n_hire)]
+        available -= spent
 
     # ---- Keep enough wheat seed for every tile we intend to plant ----
     seeds_owned = seeds.get("WHEAT", 0)
@@ -301,21 +331,8 @@ def agent(obs):
             available -= cost
             break
 
-    # ---- Hire hands for the day, sized to owned land and whatever cash the
-    # sections above haven't already claimed ----
-    hire_orders = []
-    if obs["hour"] == 0:
-        desired_hands = min(MAX_HANDS, max(0, len(tiles) // TILES_PER_ACTOR - 1))
-        n_hire, spent = 0, 0
-        while n_hire < desired_hands:
-            cost = _fib_hire_cost(n_hire)
-            if spent + cost > available:
-                break
-            spent += cost
-            n_hire += 1
-        hire_orders = [["HIRE"] for _ in range(n_hire)]
-
-    # Hiring goes last: maxMarketOrdersPerTurn (10) truncates the market list,
+    # Hiring goes last IN THE LIST (its cost was already reserved above):
+    # maxMarketOrdersPerTurn (10) truncates the market list,
     # and losing a hand-hire for one day is far cheaper than losing a wheat
     # sale or animal purchase. Replay showed a 9-hand hire burst plus a sell
     # and two buys hit 12 orders on one turn -- with hire queued first, the
