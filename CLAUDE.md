@@ -280,6 +280,39 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     aggression for real would need `HIRE` to have its own reserved floor *before* seed/animal/
     land purchases claim the shared pool, not just a smaller reserve number -- a bigger, riskier
     change than a one-line constant tweak, not attempted this round.
+  - **Tried and reverted: SW land paired with a dedicated crop (strawberry) instead of more
+    wheat, plus raising `MAX_HANDS` to match.** The earlier land-alone regression (above) blamed
+    wheat specifically -- MAX_HANDS=10/TILES_PER_ACTOR=5 tuned for a continuously-replanted wheat
+    monoculture, not more of the same on 75 tiles. Retried buying SW but routing 100% of it to
+    STRAWBERRY instead (an *ongoing* crop, never replanted after its one planting, matching the
+    #1 team's own pattern), carving SW-quadrant tiles out by coordinate (`x < half and y >= half`)
+    before wheat/melon/structures ever see them, so the existing NW/NE logic needed zero changes.
+    Still a clear regression: ~25,300/~24,800 avg reward (down from 31,696.8/31,895.0), 0 losses
+    but a real drop. Replay showed weeds climbing to 18-23 tiles and animals visibly dying (cow
+    6->3, sheep 3->1) after SW came online -- turns out strawberry needs daily watering to avoid
+    weed conversion **just like wheat** (README/engine: only the yield-accrual mechanism differs
+    between one-time and ongoing crops, not the watering-to-avoid-weeds requirement), so pairing
+    SW with a different crop did NOT reduce the actor-turn demand the "less actor-intensive
+    ongoing crop" framing implied -- 75 tiles needs more hands than 50 regardless of what's
+    planted on the extra 25. Raised `MAX_HANDS` 10->14 to match (75 // 5 - 1) as a second try,
+    still bundled with SW+strawberry: barely moved the needle (~25,500/~25,450, +1-2%). Replay
+    showed why: hand count *never reached the old cap of 10*, let alone 14 -- it fluctuated
+    2-9 the whole game, because the $2000 SW purchase plus ongoing strawberry seed costs compete
+    with wheat/melon/animal/hire spending from the same `available` pool (see "Shared cash pool"
+    in `main.py`), and that pool is too thin this early (SW gets bought the moment `money >=
+    $4000`, often right as the base economy is still establishing) to absorb a big land purchase
+    without crashing hire-sizing on the turns that follow. So the bottleneck wasn't crop-tending
+    cost (first hypothesis) or actor-count ceiling (second hypothesis) -- it's **cash-flow timing**:
+    the same root cause as the cash-aggression regression above, just triggered by a lump purchase
+    instead of a smaller daily reserve. Reverted both changes. This is the fourth distinct
+    scale-up attempt to fail for a variant of the same underlying reason (land, cash aggression,
+    land+different-crop, land+different-crop+more hands all regressed) -- strong evidence this
+    agent's current architecture (single shared cash pool, buy-the-moment-affordable land/seed
+    logic, no reserved budget per initiative) has a real ceiling around ~31-32k that isn't
+    reachable by tuning one more variable. A genuine fix would need explicit cash budgeting (e.g.
+    don't commit to a big purchase until a reserve well beyond current running costs exists, not
+    just `money >= cost * 2`) rather than another isolated constant change -- a real design
+    change, not attempted this round.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
