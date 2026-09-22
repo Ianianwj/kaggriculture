@@ -61,6 +61,18 @@ WHEAT_MAX_YIELD_DAY = 4
 # crops, not before them -- reordered the plan to validate crop
 # diversification on the existing 50-tile base first.
 LAND_COSTS = {"NE": 1000}
+# Tried dropping this to 5 (matching the #1 team's own near-$0 daily
+# balances -- see CLAUDE.md "Copying the #1 team's strategy") and it was a
+# clear regression: hand count went erratic (0-1 hands on several days,
+# vs. a steady ~7-9), and melon's 6 bought seeds were never planted the
+# entire game. Root cause: HIRE is deliberately sized last against
+# whatever `available` cash survives seed/animal/land purchases (see
+# "Shared cash pool" below) -- with only a $5 buffer, those purchases
+# regularly spend it all, crashing hand count on exactly the days melon's
+# narrow window needs actor-turns most. The #1 team can run this lean
+# because hiring isn't competing with a hard-gated one-shot planting
+# window the way ours is; copying their cash aggression here needs hire
+# to have its own reserved floor first, not just a smaller number.
 CASH_RESERVE = 50
 MAX_SEED_STOCKPILE = 30
 

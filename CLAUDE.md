@@ -261,6 +261,25 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     "as high as possible" or "as low as possible" but wherever it stops competing with
     deadline-bound tasks -- worth remembering before promoting any other low-urgency tier the
     same way.
+  - **Tried and reverted: copying the #1 team's cash aggression.** They run money down to
+    $1-70 nearly every single day (see the DSM money trajectory earlier in this section); our
+    `CASH_RESERVE=50` always leaves a fixed buffer untouched. Dropped it to 5 alone, nothing
+    else changed -- a clear regression: ~27,100/~28,200 avg reward (down from 31,696.8/31,895.0),
+    still 0 losses but a real drop. Replay-diagnosed rather than just reverting blind: hand count
+    went erratic (crashed to 0-1 hands on several days instead of a steady ~7-9), and **zero**
+    `PLANT MELON` actions fired the entire game -- the 6 melon seeds bought around day 6 sat
+    stranded, unplanted, for the rest of the season (same failure shape as the strawberry
+    seed-stranding bug, different cause). Root cause: `HIRE` is deliberately sized last, against
+    whatever `available` cash survives that turn's seed/animal/land purchases (see "Shared cash
+    pool" comment in `main.py`) -- with only a $5 floor, those purchases regularly spend it all
+    before hire-sizing ever runs, crashing hand count on exactly the days melon's narrow
+    day-5-7 window needs actor-turns most. The #1 team can run this lean because their hiring
+    isn't competing against a hard-gated one-shot planting window the same way ours is (their
+    crops ramp up gradually over many days -- see the strawberry ramp-up finding above -- rather
+    than needing a burst of actor-turns in one narrow week). Reverted to 50. Copying their cash
+    aggression for real would need `HIRE` to have its own reserved floor *before* seed/animal/
+    land purchases claim the shared pool, not just a smaller reserve number -- a bigger, riskier
+    change than a one-line constant tweak, not attempted this round.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
