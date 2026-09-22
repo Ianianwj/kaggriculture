@@ -183,16 +183,32 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     production, decays naturally once `max_yield` productions complete and it's left unharvested-in-
     place); this genuinely isn't worth doing as a single un-replanted batch the way melon is.
     Reverted rather than keep a net-negative crop.
-  - Remaining candidates to test one at a time, replay-validated before the next, given the
-    strawberry lesson above (a crop's land needs to out-earn what continuously-replanted wheat
-    would make on the same tiles, not just have a higher sticker price): a *larger* melon target
-    (already proven, cheapest way to test more of a good thing before trying something new and
-    unproven), tomato (2.4x wheat's price, but a ~13-day cycle closer to wheat's own — worth
-    checking its $/tile/day rather than assuming it repeats strawberry's shortfall), strawberry
-    *with replanting* (would need land re-claimed after a batch decays, unlike the current
-    one-shot claim — more code, but might unlock the premium that a single batch couldn't), then
-    SW land once diversification actually lowers actor-turns/tile enough to justify it, then a
-    bigger animal herd, tighter cash, and endgame wind-down.
+  - **Tried and reverted: a larger melon target.** Raised `MELON_TARGET` 6→10, nothing else
+    changed. Also a regression: 20W-0L vs `random` but only 15W-5L vs `starter`, avg reward
+    ~13,300/~12,900. Even an already-*proven* crop isn't free to scale — the extra 4 tiles'
+    seed cost (+$320) and land claim land in the exact same narrow day 5-7 window, competing with
+    that same day's first animal purchases for the same handful of actors. Reverted to 6.
+  - **Tried and reverted: tomato.** `TOMATO_TARGET=6`, staggered to start day 10 (well after
+    melon's day 5-7 window closes) specifically to avoid repeating strawberry's window-collision
+    bug. That collision didn't recur, but it's a regression anyway: 20W-0L both baselines (no
+    losses, unlike strawberry's crash) but avg reward ~15,900/~14,900, still well below
+    melon-only's ~28,650/~27,350. One replay showed a weed spike to 19 tiles by day 10 — right as
+    tomato's window opens but before any tomato could physically be planted yet, so this doesn't
+    look like tomato's own contention the way strawberry's day-5 overlap was; more likely this
+    farm's actor economy is simply *fragile* near this size (melon-scale-up regressed via a
+    similar mechanism without any staggering issue at all). Reverted; needs more replay diagnosis
+    before retrying, not just a target/timing tweak.
+  - **Emerging pattern across all three reverted attempts**: this agent's economy, as currently
+    architected, sits at a narrow, fairly fragile local optimum around wheat + melon(6) +
+    cow(6)/sheep(3) — the "add one small thing" playbook that worked once for melon doesn't
+    reliably generalize to the next crop, even staggered and even when the new crop's own
+    mechanics work correctly. Whatever headroom remains likely needs either genuinely idle actor
+    capacity to spend (more hands, which the Fibonacci cost curve makes expensive) or a crop
+    with melon-like economics (large price multiple relative to wheat, short enough cycle to
+    still pay off unreplanted) rather than mid-tier ones like strawberry/tomato. Candidates not
+    yet tried: strawberry/tomato *with replanting* (more code, might unlock value a single batch
+    can't), SW land only after that headroom exists, a bigger animal herd, tighter cash, endgame
+    wind-down — each still needs its own isolated replay validation, not a bundle.
 - Not yet using: SW/SE land (see above), strawberry/tomato/carrot, fertilizer for crops, a bigger
   animal herd matching the #1 team's ~18-23, tighter cash management, or an endgame crop/hand
   wind-down (the studied opponent had 0 hands and 0 planted crops by day 29, presumably because a
