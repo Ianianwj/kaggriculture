@@ -160,12 +160,39 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     never replanted (matching the #1 team's own one-shot pattern), without needing any of the
     actor-capacity machinery the failed big-bang attempt built (that was reverted along with
     everything else — small, gated targets didn't need it).
-  - Next candidates, each to be added and replay-validated alone before the next: strawberry
-    (ongoing crop — first real test of the `_daily_refresh_plants` scheduled-production mechanics,
-    since melon is one-time like wheat), then tomato, then revisit SW land once crop diversity
-    is far enough along to justify it, then a bigger animal herd, then cash-reserve tightening,
-    then endgame wind-down. Test order follows how self-contained and low-risk each piece is, not
-    the #1 team's own likely order.
+  - **Tried and reverted: strawberry, first attempt.** `STRAWBERRY_TARGET=8`, window days 5-10
+    (same start day as melon's). Two bugs before even getting to the economics: (1) the two crops'
+    windows overlapping on day 5 piled up seed-buying/planting for both plus that day's first
+    animal purchases onto the same handful of actors — weeds spiked to 27 tiles by day 10 in most
+    trials, 2W-18L vs `starter`. Fixed by staggering strawberry's window to start day 10 (3 days
+    after melon's closes, via a new `first_plant_day` field generalizing what was a shared
+    `WHEAT_MAX_YIELD_DAY` gate). (2) With that fixed, replay showed seeds bought early in a window
+    can sit **permanently unplanted** if actors are busy the turns that follow: land reservation
+    and seed-buying were both gated by the same `target vs. existing` check that reads 0 once the
+    window closes, so `existing` staying 0 (nothing got planted before the window ended) reopens
+    nothing — 6 bought strawberry seeds sat in inventory the entire rest of one game. Fixed by
+    widening the window (7 days instead of 3) to give planting more chances to actually happen. Both
+    fixes were real and are in `_classify_plant`/`CROP_PLANS`' `first_plant_day`, but the *economics*
+    still didn't pencil out even after both: 40W-0L but avg reward ~18,200/~19,050, well below
+    melon-only's ~28,650/~27,350. Root cause, worked out after the bugs: melon's win was driven by
+    a 10x price premium over wheat (comfortably worth dedicating land to for even one un-replanted
+    cycle); strawberry's premium is only ~4.8x (`$120` vs. wheat's `$25`) while its full cycle
+    (plant to end of scheduled production) is ~19 days vs. wheat's ~5 — planted once and never
+    replanted, those tiles earn less over the season than continuously-replanted wheat would have
+    on the same land. The mechanics work correctly (harvests immediately on each scheduled
+    production, decays naturally once `max_yield` productions complete and it's left unharvested-in-
+    place); this genuinely isn't worth doing as a single un-replanted batch the way melon is.
+    Reverted rather than keep a net-negative crop.
+  - Remaining candidates to test one at a time, replay-validated before the next, given the
+    strawberry lesson above (a crop's land needs to out-earn what continuously-replanted wheat
+    would make on the same tiles, not just have a higher sticker price): a *larger* melon target
+    (already proven, cheapest way to test more of a good thing before trying something new and
+    unproven), tomato (2.4x wheat's price, but a ~13-day cycle closer to wheat's own — worth
+    checking its $/tile/day rather than assuming it repeats strawberry's shortfall), strawberry
+    *with replanting* (would need land re-claimed after a batch decays, unlike the current
+    one-shot claim — more code, but might unlock the premium that a single batch couldn't), then
+    SW land once diversification actually lowers actor-turns/tile enough to justify it, then a
+    bigger animal herd, tighter cash, and endgame wind-down.
 - Not yet using: SW/SE land (see above), strawberry/tomato/carrot, fertilizer for crops, a bigger
   animal herd matching the #1 team's ~18-23, tighter cash management, or an endgame crop/hand
   wind-down (the studied opponent had 0 hands and 0 planted crops by day 29, presumably because a
