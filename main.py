@@ -16,11 +16,13 @@ caused a much worse poverty trap (see MELON_TARGET's comment).
 Every turn, every active unit is greedily matched to the nearest task in
 this priority order: feed unfed animals (losing one to starvation costs
 far more than delaying anything else by a turn) > harvest (crops and
-animal products) > water thirsty plants > place a purchased animal into
-its empty structure > build new structures > plant wheat, then melon, on
-the rest of the land > clear weeds to reclaim tiles. Actors idle on a
-useful tile opportunistically CARE for a fed animal or collect its
-fertilizer.
+animal products) > water thirsty plants > fertilize a wheat tile still in
+its watering-bonus window, using fertilizer already carried > place a
+purchased animal into its empty structure > build new structures > plant
+wheat, then melon, on the rest of the land > clear weeds to reclaim tiles
+> collect fertilizer from fed animals, for a future turn's fertilize tier
+to spend. Actors idle on a useful tile opportunistically CARE for a fed
+animal.
 
 Key mechanics this relies on (confirmed against the installed
 kaggle_environments source, not just the README): FEED and PLACE consume
@@ -318,7 +320,23 @@ def agent(obs):
     for plan in ANIMAL_PLANS:
         structure_plans.setdefault(plan["structure"], []).append(plan)
 
+    # Studying the #1 team's own replay (see CLAUDE.md "Copying the #1
+    # team's strategy") showed 490 COLLECT_FERTILIZER + 237 FERTILIZE calls
+    # over 720 turns -- a dedicated, routed habit, not a rare idle-time
+    # bonus. Confirmed against the engine: FERTILIZE sets
+    # fertilized_until_day = day+2 (active for day, day+1, day+2), and for a
+    # one-time crop, WATER's own yield bonus doubles (1 -> 2) on any day that
+    # condition holds. Wheat's watering-bonus window is exactly 3 days
+    # (age 2-4), so ONE FERTILIZE call at age 2 covers the whole window and
+    # lifts wheat's realistic cap from 4 (watering alone) to its true max of
+    # 6 -- a 50% yield boost from a byproduct our own animals already make
+    # for free. Melon is deliberately excluded: its window is 7 days (age
+    # 6-12) but watering alone already reaches its cap of 6 by age 10 (see
+    # README), so spending fertilizer there is wasted.
+    WHEAT_FERTILIZE_WINDOW_START = (WHEAT_MAX_YIELD_DAY + 1) // 2
+
     harvest_targets, feed_targets, water_targets, place_targets, weed_targets = [], [], [], [], []
+    fertilize_targets, collect_fertilizer_targets = [], []
     for x, y, tile in tiles:
         if isinstance(tile, dict):
             if tile.get("kind") == "PLANT":
@@ -340,11 +358,23 @@ def agent(obs):
                     harvest_targets.append((x, y))
                 elif not tile["watered_today"] and age <= max_yield_day:
                     water_targets.append((x, y))
+                # `fertilized_until_day < WHEAT_MAX_YIELD_DAY` means this
+                # tile's coverage (if any) doesn't yet reach the window's
+                # last day -- re-targets a tile fertilized too early without
+                # re-spending on one already fully covered.
+                if (
+                    tile["crop"] == "WHEAT"
+                    and WHEAT_FERTILIZE_WINDOW_START <= age <= WHEAT_MAX_YIELD_DAY
+                    and tile.get("fertilized_until_day", -1) < WHEAT_MAX_YIELD_DAY
+                ):
+                    fertilize_targets.append((x, y))
             elif "animal" in tile:
                 if tile["yield_units"] > 0:
                     harvest_targets.append((x, y))
                 if not tile["fed_today"]:
                     feed_targets.append((x, y))
+                if tile["fertilizer_available"]:
+                    collect_fertilizer_targets.append((x, y))
             elif tile.get("kind") in structure_plans:
                 place_targets.append((x, y, tile["kind"]))
             elif tile.get("kind") == "WEED":
@@ -419,6 +449,13 @@ def agent(obs):
 
     # 3. Water thirsty wheat -- avoid weeds.
     assign(water_targets, lambda ai, t: ["WATER"])
+
+    # 3b. Spend any fertilizer already carried (from tier 7b's collection on
+    #     a previous turn -- COLLECT_FERTILIZER lands straight in the acting
+    #     unit's own inventory, like HARVEST, so there's no shed round-trip)
+    #     on a wheat tile that still needs it this window.
+    has_fertilizer = lambda ai, t: inventories[ai].get("FERTILIZER", 0) > 0
+    assign(fertilize_targets, lambda ai, t: ["FERTILIZE"], feasible=has_fertilizer)
 
     # 4. Place a carried animal into its empty structure; if nobody is
     #    carrying one yet, send an idle actor to the shed to pick one up.
@@ -496,17 +533,25 @@ def agent(obs):
     #    no clearing at all.
     assign(weed_targets, lambda ai, t: ["DIG"])
 
-    # 8. Opportunistic bonuses for actors with nothing better to do this
-    #    turn: care for a fed animal, or collect its fertilizer.
+    # 7b. Collect fertilizer from fed animals for a future turn's tier 3b
+    #     above. Routed like any other tier (actors are moved toward it, not
+    #     just used when one happens to already be standing there) -- an
+    #     earlier attempt left this as an idle-time-only bonus in tier 8 and
+    #     found it almost never fired (3 times in 720 turns, ~9 hands always
+    #     had a higher-priority task), so the fertilizer yield boost was
+    #     dead code with nothing to spend. Low priority (after weeding) since
+    #     collected fertilizer doesn't expire if left uncollected a while
+    #     (README: "an animal left alone for five days still yields 1 unit").
+    assign(collect_fertilizer_targets, lambda ai, t: ["COLLECT_FERTILIZER"])
+
+    # 8. Opportunistic bonus for actors with nothing better to do this turn:
+    #    care for a fed animal (banks a yield bonus for its next production).
     for ai in list(unassigned):
         x, y = actor_positions[ai]
         tile = me["tiles"][y][x]
         if isinstance(tile, dict) and "animal" in tile:
             if not tile["cared_today"] and tile["fed_today"]:
                 ops[ai] = ["CARE"]
-                unassigned.remove(ai)
-            elif tile["fertilizer_available"]:
-                ops[ai] = ["COLLECT_FERTILIZER"]
                 unassigned.remove(ai)
 
     for ai in unassigned:

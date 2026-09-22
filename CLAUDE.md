@@ -39,13 +39,16 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a livestock
   operation (`ANIMAL_PLANS`: 6 cows + 3 sheep sharing PASTURE; goose support still exists in code
   but is dialed to 0 target, see below) fed from its own wheat surplus, plus a small one-shot
-  melon batch (`MELON_TARGET`) for market diversification, and clears weeds via DIG to reclaim
-  land. Every unit is greedily matched to the nearest task: feed unfed animals > harvest (crops +
-  animal product) > water thirsty plants > place a carried animal into its empty structure > build
-  new structures > plant wheat, then melon > clear weeds. Wheat (and melon) harvests are timed to
-  the yield peak rather than the first eligible day, since HARVEST costs one turn either way.
-  Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~28,650 / ~27,350 over 40 trials —
-  up from ~26,150 / ~26,350 after adding melon (see "Copying the #1 team's strategy" below),
+  melon batch (`MELON_TARGET`) for market diversification, spends fertilizer collected from its
+  own animals to boost wheat's yield cap, and clears weeds via DIG to reclaim land. Every unit is
+  greedily matched to the nearest task: feed unfed animals > harvest (crops + animal product) >
+  water thirsty plants > fertilize a wheat tile in its watering-bonus window (using fertilizer
+  already carried) > place a carried animal into its empty structure > build new structures >
+  plant wheat, then melon > clear weeds > collect fertilizer from fed animals for a future turn.
+  Wheat (and melon) harvests are timed to the yield peak rather than the first eligible day, since
+  HARVEST costs one turn either way. Benchmark: 40W-0L vs both `random` and `starter`, avg reward
+  ~28,890 / ~27,850 over 40 trials — up from ~28,650 / ~27,350 after adding a routed fertilizer
+  tier (see "Copying the #1 team's strategy" below), ~26,150 / ~26,350 after adding melon,
   ~21,528 / ~21,789 after the market/dispatch bug fixes, ~17,450 / ~18,134 after fixing the day-4
   watering bug, ~10,127 / ~10,316 after capping land expansion to NE only, and ~5770 / ~5915 at
   the start of the first round of fixes.
@@ -209,27 +212,63 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     yet tried: strawberry/tomato *with replanting* (more code, might unlock value a single batch
     can't), SW land only after that headroom exists, a bigger animal herd, tighter cash, endgame
     wind-down — each still needs its own isolated replay validation, not a bundle.
-- Not yet using: SW/SE land (see above), strawberry/tomato/carrot, fertilizer for crops, a bigger
-  animal herd matching the #1 team's ~18-23, tighter cash management, or an endgame crop/hand
-  wind-down (the studied opponent had 0 hands and 0 planted crops by day 29, presumably because a
-  freshly-planted crop can't mature before season end that late). Further layers should be
-  validated the same way this round was — replay-inspected, not just win/loss, one variable at a
-  time — since the real leaderboard (thousands of tuned competitor bots, currently ranking us
-  ~7000th of ~9700 at a 491 score vs. leaders around 3000) is a much higher bar than these two
-  fixed baselines.
-- **Tried and reverted: spending fertilizer on wheat.** Engine confirms `FERTILIZE` raises wheat's
-  max yield 4→6 (worth doing), and it's free — collected off animals via `COLLECT_FERTILIZER`
-  (already implemented as an idle-time bonus action, tier 8). But adding a tier to actually spend
-  it on wheat moved the benchmark by less than trial-to-trial noise (~21,600/~21,600 either way
-  over 40 trials, vs. ~21,421/~21,900 without it). Replayed a full 720-turn game to find out why
-  instead of guessing: only 3 `COLLECT_FERTILIZER` calls and **zero** `FERTILIZE` calls fired in
-  the whole game. Root cause: collection is gated on an actor being *fully idle* standing on the
-  animal's own tile, which with ~9 hands covering ~50 tiles almost never happens — there's always
-  a higher-priority task. The fertilizer-spending logic itself was never wrong, it just never had
-  any fertilizer to spend. Reverted rather than keep dead code. To make this lever real, collection
-  would need its own routed tier (like weeds/DIG) instead of riding on leftover idle time, and that
-  routing cost (actor-turns diverted from tending ~50 wheat tiles) needs its own A/B test before
-  assuming it's a net win.
+  - **Investigated whether the #1 team's edge is market-price adaptivity — mostly not, but it
+    surfaced a real structural gap: fertilizer.** Compared action *types*, not just tile
+    composition, against the same #1-team replay. Their SELL behavior turned out to be "dump
+    whatever's in the shed most turns" — the same policy our own SELL loop already runs — not
+    price-timed holding: directly checked by comparing each turn's shed stock of every product
+    against that turn's SELL quantity, and while they do hold back stock on 76-100% of turns
+    depending on product, that lines up with `maxMarketOrdersPerTurn` (10) forcing them to
+    prioritize across up to 9 simultaneously-sellable products, not with watching price trends.
+    One melon dump (36 units over 2 days, visibly crashing its own price 271→136) confirms
+    they don't hold back one-shot harvests either — same "just sell it" policy we already have.
+    The one real gap market data surfaced: they run `FERTILIZE`/`COLLECT_FERTILIZER`
+    constantly (490 collects / 237 fertilizes over 720 turns) where we'd tried this exact lever
+    before and reverted it as dead code (see below) after it never fired. Re-diagnosed why
+    theirs fires and ours didn't: the mechanic itself was never the problem, only where it sat
+    in priority — ours was tier-8 idle-fallback-only, and idle time basically doesn't exist with
+    ~9 hands covering ~50 tiles. Fixed by giving both actions real `assign()`-routed tiers
+    (actors get moved toward them, not just used when one happens to already be standing there):
+    tier 3b spends any fertilizer an actor is already carrying on a wheat tile still inside its
+    watering-bonus window, and tier 7b (low priority, after weeding) sends idle actors to collect
+    from fed animals for a future turn's tier 3b to spend. Confirmed against engine source: one
+    `FERTILIZE` call at wheat age 2 covers all 3 days of its watering-bonus window with a single
+    unit, raising wheat's realistic cap from 4 (watering alone) to its true max of 6 — a 50%
+    yield boost from a byproduct animals already make for free. Melon is deliberately excluded:
+    engine math confirms it already saturates its own cap (6) through watering alone by age 10
+    (see README), so spending fertilizer there is wasted. Validated over 40 trials:
+    28,891.9/27,853.9 avg reward (up from melon-only's 28,654.2/27,347.2), 40W-0L both
+    baselines — small but real, no regressions. Replay-checked and only 12 `FERTILIZE` calls
+    fired in that game, well under the #1 team's per-animal rate, since tier 7b still sits
+    behind weeding and is starved for actor-turns — raising its priority is an open follow-up,
+    not yet tried.
+  - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
+    replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
+    turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
+    always mid-reset. Sampling any other hour shows them actually scaling 4→12 hands over the
+    season, tracking their land/animal growth. No actionable difference found here beyond what
+    `MAX_HANDS`/`TILES_PER_ACTOR` already does.
+- Not yet using: SW/SE land (see above), strawberry/tomato/carrot, a bigger animal herd matching
+  the #1 team's ~18-23, tighter cash management, a higher-priority fertilizer tier (see above), or
+  an endgame crop/hand wind-down (the studied opponent had 0 hands and 0 planted crops by day 29,
+  presumably because a freshly-planted crop can't mature before season end that late). Further
+  layers should be validated the same way this round was — replay-inspected, not just win/loss,
+  one variable at a time — since the real leaderboard (thousands of tuned competitor bots,
+  currently ranking us ~7000th of ~9700 at a 491 score vs. leaders around 3000) is a much higher
+  bar than these two fixed baselines.
+- **Tried and reverted (first attempt): spending fertilizer on wheat.** Engine confirms
+  `FERTILIZE` raises wheat's max yield 4→6 (worth doing), and it's free — collected off animals
+  via `COLLECT_FERTILIZER` (at the time, only implemented as an idle-time bonus action, tier 8).
+  But adding a tier to actually spend it on wheat moved the benchmark by less than trial-to-trial
+  noise (~21,600/~21,600 either way over 40 trials, vs. ~21,421/~21,900 without it). Replayed a
+  full 720-turn game to find out why instead of guessing: only 3 `COLLECT_FERTILIZER` calls and
+  **zero** `FERTILIZE` calls fired in the whole game. Root cause: collection was gated on an actor
+  being *fully idle* standing on the animal's own tile, which with ~9 hands covering ~50 tiles
+  almost never happens — there's always a higher-priority task. The fertilizer-spending logic
+  itself was never wrong, it just never had any fertilizer to spend. Reverted rather than keep
+  dead code, with the diagnosis (needs its own routed tier, not idle-fallback) written down as the
+  fix for later — see the successful second attempt above, which did exactly that after the #1
+  team's own replay confirmed the lever was worth revisiting.
 
 ## Testing before submitting
 
