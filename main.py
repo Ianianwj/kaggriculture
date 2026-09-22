@@ -5,18 +5,22 @@ Kaggriculture submission entrypoint. Must expose `agent(obs)` returning
 Strategy: a multi-tile, multi-actor wheat farm (farmer + hired hands) that
 also runs a livestock operation (cows and sheep sharing pasture -- geese
 support still exists in the code but is dialed to 0, see ANIMAL_PLANS)
-fed from its own wheat surplus. Animal purchases are gated until wheat is
-actually flowing (see wheat_flowing below) -- replay analysis showed an
-animal bought on day 0 has no feed source at all and is guaranteed to
-starve within 2 days, burning its full purchase cost.
+fed from its own wheat surplus, plus a small one-shot melon batch (see
+MELON_TARGET) for market diversification. Animal purchases -- and melon
+planting -- are gated until wheat is actually flowing (see wheat_flowing
+below) -- replay analysis showed an animal bought on day 0 has no feed
+source at all and is guaranteed to starve within 2 days, and a separate
+attempt at introducing new crops before wheat's own income was established
+caused a much worse poverty trap (see MELON_TARGET's comment).
 
 Every turn, every active unit is greedily matched to the nearest task in
 this priority order: feed unfed animals (losing one to starvation costs
 far more than delaying anything else by a turn) > harvest (crops and
-animal products) > water thirsty wheat > place a purchased animal into
-its empty structure > build new structures > plant wheat on the rest of
-the land > clear weeds to reclaim tiles. Actors idle on a useful tile
-opportunistically CARE for a fed animal or collect its fertilizer.
+animal products) > water thirsty plants > place a purchased animal into
+its empty structure > build new structures > plant wheat, then melon, on
+the rest of the land > clear weeds to reclaim tiles. Actors idle on a
+useful tile opportunistically CARE for a fed animal or collect its
+fertilizer.
 
 Key mechanics this relies on (confirmed against the installed
 kaggle_environments source, not just the README): FEED and PLACE consume
@@ -37,9 +41,37 @@ WHEAT_MAX_YIELD_DAY = 4
 # NW+NE (50). SW/SE would cost $6000 combined for land we can't staff any
 # better than what we already have, per replay (tile utilization doesn't
 # improve past ~2 quadrants at this actor cap).
+#
+# Tried buying SW in isolation, as the first step of copying the #1
+# leaderboard team's strategy (see CLAUDE.md): confirmed via replay this
+# alone is a regression (weeds climbing 3->26 tiles by day 29) because
+# MAX_HANDS=10 was tuned for ~5 tiles/actor on 50 tiles, and hiring enough
+# more hands to hold that ratio on 75 is uneconomical -- the 14th hand
+# would cost $377/day (Fibonacci) against a hand's ~$90-100/day value. The
+# #1 team affords MORE land with FEWER hands (8 for 75 tiles) specifically
+# because their ongoing crops (strawberry, tomato -- see CROP_DATA) need
+# less attention per tile than a continuously-replanted wheat monoculture.
+# So land expansion only pays off together with those less actor-intensive
+# crops, not before them -- reordered the plan to validate crop
+# diversification on the existing 50-tile base first.
 LAND_COSTS = {"NE": 1000}
 CASH_RESERVE = 50
 MAX_SEED_STOCKPILE = 30
+
+# Step 2: add MELON alone (no strawberry/tomato yet) as a small, one-shot
+# batch on the existing 50-tile base, gated behind the same day wheat_flowing
+# opens for animal purchases -- wheat gets to establish fully first, then
+# melon claims a small, fixed slice of land, never replanted after that one
+# batch (matches the #1 team's own pattern: melon appeared once early and
+# was never replanted -- its 12-day max_yield_day plus a punishing glut
+# curve on oversupply make a second full cycle not worth the market risk).
+# Melon's own watering-bonus window works exactly like wheat's (both are
+# one-time crops), just with its own max_yield_day -- see the classification
+# loop below, generalized to check crop type rather than assuming wheat.
+MELON_SEED_COST = 80
+MELON_MAX_YIELD_DAY = 12
+MELON_TARGET = 6
+MELON_LAST_PLANT_DAY = 7
 # Hire cost is Fibonacci per hand per day (1,1,2,3,5,8,13,21,34,55,89,144...).
 # A hand tending ~TILES_PER_ACTOR wheat tiles is worth roughly $90-100/day
 # gross, so the 11th hand (cost 144) is the first one that's a net loss --
@@ -193,6 +225,16 @@ def agent(obs):
         slots_wanted = max(0, target - existing)
         claimed, empty_by_dist = empty_by_dist[:slots_wanted], empty_by_dist[slots_wanted:]
         build_targets.extend((x, y, BUILD_OP[structure]) for x, y in claimed)
+
+    # Melon claims its small slice before wheat gets the remainder -- see
+    # MELON_TARGET above for why this is gated and capped so small.
+    melon_existing = sum(
+        1 for _, _, t in tiles if isinstance(t, dict) and t.get("kind") == "PLANT" and t.get("crop") == "MELON"
+    )
+    melon_wants_more = WHEAT_MAX_YIELD_DAY < obs["day"] <= MELON_LAST_PLANT_DAY
+    melon_target = MELON_TARGET if melon_wants_more else melon_existing
+    melon_slots = max(0, melon_target - melon_existing)
+    melon_targets, empty_by_dist = empty_by_dist[:melon_slots], empty_by_dist[melon_slots:]
     plant_targets = empty_by_dist
 
     # ---- Shared cash pool for everything this turn spends. Seed, animal,
@@ -212,6 +254,13 @@ def agent(obs):
     if to_buy > 0:
         market.append(["BUY_SEED", "WHEAT", to_buy])
         available -= to_buy * WHEAT_SEED_COST
+
+    # ---- Keep enough melon seed for its (small, one-shot) reserved land ----
+    melon_seeds_owned = seeds.get("MELON", 0)
+    melon_to_buy = max(0, min(len(melon_targets) - melon_seeds_owned, available // MELON_SEED_COST))
+    if melon_to_buy > 0:
+        market.append(["BUY_SEED", "MELON", melon_to_buy])
+        available -= melon_to_buy * MELON_SEED_COST
 
     # ---- Buy animals up to each plan's target, once wheat is flowing ----
     # Wheat harvests are deliberately delayed until WHEAT_MAX_YIELD_DAY (see
@@ -274,17 +323,22 @@ def agent(obs):
         if isinstance(tile, dict):
             if tile.get("kind") == "PLANT":
                 age = obs["day"] - tile["planted_day"]
-                # The watering bonus window is inclusive of WHEAT_MAX_YIELD_DAY
+                # Melon is also a one-time crop with the exact same
+                # watering-bonus-window shape as wheat, just its own
+                # max_yield_day -- generalized here rather than duplicating
+                # wheat's block.
+                max_yield_day = MELON_MAX_YIELD_DAY if tile["crop"] == "MELON" else WHEAT_MAX_YIELD_DAY
+                # The watering bonus window is inclusive of max_yield_day
                 # itself (engine: window_start <= age <= max_yield_day), so a
                 # plant at exactly that age still needs watering today before
                 # harvest -- skipping straight to harvest here silently drops
                 # one yield unit (of 4) on every single wheat cycle.
                 if tile["yield_units"] > 0 and (
-                    age > WHEAT_MAX_YIELD_DAY
-                    or (age == WHEAT_MAX_YIELD_DAY and tile["watered_today"])
+                    age > max_yield_day
+                    or (age == max_yield_day and tile["watered_today"])
                 ):
                     harvest_targets.append((x, y))
-                elif not tile["watered_today"] and age <= WHEAT_MAX_YIELD_DAY:
+                elif not tile["watered_today"] and age <= max_yield_day:
                     water_targets.append((x, y))
             elif "animal" in tile:
                 if tile["yield_units"] > 0:
@@ -423,6 +477,18 @@ def agent(obs):
         return ["PLANT", "WHEAT"]
 
     assign(plant_targets, do_plant, feasible=can_plant)
+
+    # 6b. Plant melon on its small reserved slice, same idea as wheat above.
+    melon_plant_budget = [melon_seeds_owned]
+
+    def can_plant_melon(ai, t):
+        return melon_plant_budget[0] > 0
+
+    def do_plant_melon(ai, t):
+        melon_plant_budget[0] -= 1
+        return ["PLANT", "MELON"]
+
+    assign(melon_targets, do_plant_melon, feasible=can_plant_melon)
 
     # 7. Clear weeds to reclaim the tile for future planting. Low urgency
     #    (no immediate payoff), but left unchecked these compound: replay

@@ -38,15 +38,17 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
 - Current agent (`main.py`) is a multi-tile, multi-actor wheat farm (farmer + hired hands, up to
   `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a livestock
   operation (`ANIMAL_PLANS`: 6 cows + 3 sheep sharing PASTURE; goose support still exists in code
-  but is dialed to 0 target, see below) fed from its own wheat surplus, and clears weeds via DIG
-  to reclaim land. Every unit is greedily matched to the nearest task: feed unfed animals >
-  harvest (crops + animal product) > water thirsty wheat > place a carried animal into its empty
-  structure > build new structures > plant wheat > clear weeds. Wheat harvests are timed to the
-  yield peak (day 4) rather than the first eligible day (day 2) since HARVEST costs one turn
-  either way. Benchmark: 20W-0L (40W-0L at higher trial counts) vs both `random` and `starter`,
-  avg reward ~26,150 / ~26,350 over 40 trials — up from ~21,528 / ~21,789 after the market/dispatch
-  bug fixes, ~17,450 / ~18,134 after fixing the day-4 watering bug, ~10,127 / ~10,316 after
-  capping land expansion to NE only, and ~5770 / ~5915 at the start of the first round of fixes.
+  but is dialed to 0 target, see below) fed from its own wheat surplus, plus a small one-shot
+  melon batch (`MELON_TARGET`) for market diversification, and clears weeds via DIG to reclaim
+  land. Every unit is greedily matched to the nearest task: feed unfed animals > harvest (crops +
+  animal product) > water thirsty plants > place a carried animal into its empty structure > build
+  new structures > plant wheat, then melon > clear weeds. Wheat (and melon) harvests are timed to
+  the yield peak rather than the first eligible day, since HARVEST costs one turn either way.
+  Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~28,650 / ~27,350 over 40 trials —
+  up from ~26,150 / ~26,350 after adding melon (see "Copying the #1 team's strategy" below),
+  ~21,528 / ~21,789 after the market/dispatch bug fixes, ~17,450 / ~18,134 after fixing the day-4
+  watering bug, ~10,127 / ~10,316 after capping land expansion to NE only, and ~5770 / ~5915 at
+  the start of the first round of fixes.
 - Confirmed against the installed `kaggle_environments` source (not just the README, which was
   ambiguous here): FEED and PLACE consume from the *acting unit's own inventory*, not the shared
   shed, so animals/wheat must be PICKUP'd from the shed before use. BUILD_COOP/BUILD_PASTURE cost
@@ -128,15 +130,50 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   total) did in local testing, so this is a genuine cliff/chaos region, not a smooth curve; treat
   any number in that range as unreliable rather than trying to rank them further. See `ANIMAL_PLANS`
   in `main.py` for the blow-by-blow.
-- Not yet using: SW/SE land (deliberately, see above — revisit if `MAX_HANDS` or
-  `TILES_PER_ACTOR` change), fertilizer for crops, other crops (carrot/tomato/melon — the studied
-  opponent used melon and carrot early before switching entirely to livestock), or an endgame
-  crop/hand wind-down (the same opponent had 0 hands and 0 planted crops by day 29, presumably
-  because a freshly-planted crop can't mature before season end that late). Since we're winning
-  cleanly against both local baselines, further layers should be validated the same way this round
-  was — replay-inspected, not just win/loss — since the real leaderboard (thousands of tuned
-  competitor bots, currently ranking us ~7000th of ~9700 at a 491 score vs. leaders around 3000)
-  is a much higher bar than these two fixed baselines.
+- **Copying the #1 team's strategy: do it one small, gated step at a time, not all at once.**
+  Pulled the #1 team's own replay directly (works for ANY episode ID, not just ones we played in —
+  `kaggle competitions replay <episode_id>`, found via the leaderboard's episode links) and found a
+  much bigger strategy than our wheat+cow+sheep setup: 3 land quadrants (75 tiles, we only buy NE),
+  wheat + melon + strawberry + tomato simultaneously, ~18-23 animals of all three types, cash run
+  down to $1-70 repeatedly, and crops wound down near day 29. A first attempt implemented ALL of
+  this in one pass and it collapsed hard (one game finished at 394 total money, essentially a
+  wipeout) despite six separate rounds of real, replay-confirmed bug fixes along the way (cash
+  reservation order, actor-capacity caps on new planting, wheat-vs-crop land priority, watering
+  urgency) — every fix was individually correct and none of them were enough, because the
+  underlying problem was architectural: this agent's greedy nearest-neighbor task assignment has
+  no global capacity planning, and three new crop types plus more land multiplied the ways it could
+  spread itself too thin before any of the new investments paid off. Restarted with ONE piece at a
+  time instead:
+  - **Land alone (buying SW, nothing else changed) was tried first and is a regression** — weeds
+    climbed from 3 to 26 tiles by day 29. `MAX_HANDS=10`/`TILES_PER_ACTOR=5` was tuned for ~5
+    tiles/actor on 50 tiles; holding that ratio on 75 tiles needs hands expensive enough
+    (Fibonacci: the 14th hand costs $377/day) to not be worth it. The #1 team affords more land
+    with *fewer* hands (8 for 75 tiles) specifically because their ongoing crops (strawberry,
+    tomato) need less attention per tile than a continuously-replanted wheat monoculture — land
+    expansion only pays off *together with* those crops, not before them. Reverted; land stays at
+    NE-only until crop diversification is further along.
+  - **Melon alone, small and gated, is a validated win**: `MELON_TARGET=6`, planted only in a
+    narrow window (days 5-7, gated behind the same `wheat_flowing` day wheat's own bug-fix history
+    already established) so wheat fully establishes first, exactly like the original wheat-only
+    design did. 40W-0L, ~28,650/~27,350 avg reward, up from ~26,150/~26,350 — melon's $250 base
+    price (vs. wheat's $25) pays off heavily even at a target of just 6 tiles, planted once and
+    never replanted (matching the #1 team's own one-shot pattern), without needing any of the
+    actor-capacity machinery the failed big-bang attempt built (that was reverted along with
+    everything else — small, gated targets didn't need it).
+  - Next candidates, each to be added and replay-validated alone before the next: strawberry
+    (ongoing crop — first real test of the `_daily_refresh_plants` scheduled-production mechanics,
+    since melon is one-time like wheat), then tomato, then revisit SW land once crop diversity
+    is far enough along to justify it, then a bigger animal herd, then cash-reserve tightening,
+    then endgame wind-down. Test order follows how self-contained and low-risk each piece is, not
+    the #1 team's own likely order.
+- Not yet using: SW/SE land (see above), strawberry/tomato/carrot, fertilizer for crops, a bigger
+  animal herd matching the #1 team's ~18-23, tighter cash management, or an endgame crop/hand
+  wind-down (the studied opponent had 0 hands and 0 planted crops by day 29, presumably because a
+  freshly-planted crop can't mature before season end that late). Further layers should be
+  validated the same way this round was — replay-inspected, not just win/loss, one variable at a
+  time — since the real leaderboard (thousands of tuned competitor bots, currently ranking us
+  ~7000th of ~9700 at a 491 score vs. leaders around 3000) is a much higher bar than these two
+  fixed baselines.
 - **Tried and reverted: spending fertilizer on wheat.** Engine confirms `FERTILIZE` raises wheat's
   max yield 4→6 (worth doing), and it's free — collected off animals via `COLLECT_FERTILIZER`
   (already implemented as an idle-time bonus action, tier 8). But adding a tier to actually spend
