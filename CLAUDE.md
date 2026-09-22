@@ -44,11 +44,12 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   greedily matched to the nearest task: feed unfed animals > harvest (crops + animal product) >
   water thirsty plants > fertilize a wheat tile in its watering-bonus window (using fertilizer
   already carried) > place a carried animal into its empty structure > build new structures >
-  plant wheat, then melon > clear weeds > collect fertilizer from fed animals for a future turn.
+  plant wheat, then melon > collect fertilizer from fed animals for a future turn > clear weeds.
   Wheat (and melon) harvests are timed to the yield peak rather than the first eligible day, since
   HARVEST costs one turn either way. Benchmark: 40W-0L vs both `random` and `starter`, avg reward
-  ~28,890 / ~27,850 over 40 trials — up from ~28,650 / ~27,350 after adding a routed fertilizer
-  tier (see "Copying the #1 team's strategy" below), ~26,150 / ~26,350 after adding melon,
+  ~31,700 / ~31,900 over 40 trials — up from ~28,890 / ~27,850 after promoting the fertilizer-
+  collection tier's priority, ~28,650 / ~27,350 after adding a routed fertilizer tier (see
+  "Copying the #1 team's strategy" below), ~26,150 / ~26,350 after adding melon,
   ~21,528 / ~21,789 after the market/dispatch bug fixes, ~17,450 / ~18,134 after fixing the day-4
   watering bug, ~10,127 / ~10,316 after capping land expansion to NE only, and ~5770 / ~5915 at
   the start of the first round of fixes.
@@ -242,6 +243,24 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     fired in that game, well under the #1 team's per-animal rate, since tier 7b still sits
     behind weeding and is starved for actor-turns — raising its priority is an open follow-up,
     not yet tried.
+  - **Filled that gap: promoting the collection tier's priority, in two tries.** First tried
+    moving `COLLECT_FERTILIZER` from tier 7b (after weeding) to right after the fertilize-spend
+    tier (ahead of place/build/plant/weed) -- volume jumped a lot (171 collects / 84 fertilizes
+    in one replay, vs. 26/12 before), but it was a clear regression: vs `starter` dropped to
+    19W-1L (one of very few losses this agent has ever taken against either baseline) at
+    23,897.2 avg reward, because that many actor-turns diverted from watering/harvesting/
+    planting cost more than the extra fertilizer was worth. Backed off to a smaller promotion
+    instead -- landing it as tier 6c, after both plantings but still ahead of weeding, so it
+    only competes with weeding (low-urgency) rather than anything with a hard deadline (feed,
+    water) or that claims land/cash (place, build, plant). That's the sweet spot: 57 collects /
+    21 fertilizes in one replay (meaningfully more than the original 26/12, nowhere near the
+    186/84 that broke things), `WATER`/`HARVEST`/`PLANT` counts staying close to their original
+    levels. Validated over 40 trials: 31,696.8/31,895.0 avg reward, 40W-0L both baselines --
+    up ~10-15% from the already-validated 28,891.9/27,853.9. Lesson: for a tier whose value
+    doesn't expire if delayed (fertilizer collection has no deadline), the right priority isn't
+    "as high as possible" or "as low as possible" but wherever it stops competing with
+    deadline-bound tasks -- worth remembering before promoting any other low-urgency tier the
+    same way.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is

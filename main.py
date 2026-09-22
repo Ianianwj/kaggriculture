@@ -19,10 +19,14 @@ far more than delaying anything else by a turn) > harvest (crops and
 animal products) > water thirsty plants > fertilize a wheat tile still in
 its watering-bonus window, using fertilizer already carried > place a
 purchased animal into its empty structure > build new structures > plant
-wheat, then melon, on the rest of the land > clear weeds to reclaim tiles
-> collect fertilizer from fed animals, for a future turn's fertilize tier
-to spend. Actors idle on a useful tile opportunistically CARE for a fed
-animal.
+wheat, then melon, on the rest of the land > collect fertilizer from fed
+animals, for a future turn's fertilize tier to spend > clear weeds to
+reclaim tiles. Fertilizer collection sits just above weeding rather than
+above placing/building/planting: an earlier attempt at promoting it that
+high was a clear regression (diverting too many actor-turns from tasks
+with a hard deadline), since collected fertilizer itself never expires if
+left uncollected a while. Actors idle on a useful tile opportunistically
+CARE for a fed animal.
 
 Key mechanics this relies on (confirmed against the installed
 kaggle_environments source, not just the README): FEED and PLACE consume
@@ -527,22 +531,25 @@ def agent(obs):
 
     assign(melon_targets, do_plant_melon, feasible=can_plant_melon)
 
+    # 6c. Collect fertilizer from fed animals, for a future turn's 3b above
+    #     to spend. A first attempt promoted this ahead of place/build/plant
+    #     (right after 3b) to fix the original placement's under-volume (see
+    #     CLAUDE.md) -- that was a clear regression (vs starter dropped from
+    #     19-1 with 23,897 avg reward, one of very few losses this agent has
+    #     taken against either baseline), since diverting that many
+    #     actor-turns away from watering/harvesting/planting outweighs the
+    #     fertilizer upside. Landing it here instead -- after both plantings
+    #     but still ahead of weeding -- is a smaller promotion from the
+    #     original tier 7b (see CLAUDE.md for that attempt's ~26-collect
+    #     under-volume) without competing with anything that has a hard
+    #     deadline (feed/water) or claims land/cash (place/build/plant).
+    assign(collect_fertilizer_targets, lambda ai, t: ["COLLECT_FERTILIZER"])
+
     # 7. Clear weeds to reclaim the tile for future planting. Low urgency
     #    (no immediate payoff), but left unchecked these compound: replay
     #    analysis showed 31 of 100 owned tiles lost to weeds by day 29 with
     #    no clearing at all.
     assign(weed_targets, lambda ai, t: ["DIG"])
-
-    # 7b. Collect fertilizer from fed animals for a future turn's tier 3b
-    #     above. Routed like any other tier (actors are moved toward it, not
-    #     just used when one happens to already be standing there) -- an
-    #     earlier attempt left this as an idle-time-only bonus in tier 8 and
-    #     found it almost never fired (3 times in 720 turns, ~9 hands always
-    #     had a higher-priority task), so the fertilizer yield boost was
-    #     dead code with nothing to spend. Low priority (after weeding) since
-    #     collected fertilizer doesn't expire if left uncollected a while
-    #     (README: "an animal left alone for five days still yields 1 unit").
-    assign(collect_fertilizer_targets, lambda ai, t: ["COLLECT_FERTILIZER"])
 
     # 8. Opportunistic bonus for actors with nothing better to do this turn:
     #    care for a fed animal (banks a yield bonus for its next production).
