@@ -36,22 +36,23 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   cost was sitting in unstaffable land instead of hands/animals/seed, capital that compounds over
   720 turns. Replay confirmed tile utilization doesn't improve past ~2 quadrants at this actor cap.
 - Current agent (`main.py`) is a multi-tile, multi-actor wheat farm (farmer + hired hands, up to
-  `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a small livestock
-  operation (`ANIMAL_PLANS`: cows then geese, prioritized by $/wheat-fed) fed from its own wheat
-  surplus, and clears weeds via DIG to reclaim land. Every unit is greedily matched to the nearest
-  task: feed unfed animals > harvest (crops + animal product) > water thirsty wheat > place a
-  carried animal into its empty structure > build new structures > plant wheat > clear weeds.
-  Wheat harvests are timed to the yield peak (day 4) rather than the first eligible day (day 2)
-  since HARVEST costs one turn either way. Benchmark: 20W-0L vs both `random` and `starter` (avg
-  reward ~21,421 / ~21,900 over 20 trials) — up from ~17,450 / ~18,134 after fixing the day-4
-  watering bug (see below), ~10,127 / ~10,316 after capping land expansion to NE only, and
-  ~5770 / ~5915 at the start of this round of fixes.
+  `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a livestock
+  operation (`ANIMAL_PLANS`: 6 cows + 3 sheep sharing PASTURE; goose support still exists in code
+  but is dialed to 0 target, see below) fed from its own wheat surplus, and clears weeds via DIG
+  to reclaim land. Every unit is greedily matched to the nearest task: feed unfed animals >
+  harvest (crops + animal product) > water thirsty wheat > place a carried animal into its empty
+  structure > build new structures > plant wheat > clear weeds. Wheat harvests are timed to the
+  yield peak (day 4) rather than the first eligible day (day 2) since HARVEST costs one turn
+  either way. Benchmark: 20W-0L (40W-0L at higher trial counts) vs both `random` and `starter`,
+  avg reward ~26,150 / ~26,350 over 40 trials — up from ~21,528 / ~21,789 after the market/dispatch
+  bug fixes, ~17,450 / ~18,134 after fixing the day-4 watering bug, ~10,127 / ~10,316 after
+  capping land expansion to NE only, and ~5770 / ~5915 at the start of the first round of fixes.
 - Confirmed against the installed `kaggle_environments` source (not just the README, which was
   ambiguous here): FEED and PLACE consume from the *acting unit's own inventory*, not the shared
   shed, so animals/wheat must be PICKUP'd from the shed before use. BUILD_COOP/BUILD_PASTURE cost
   zero gold, only one action turn.
-- **Four real bugs found so far, not just tuning** (three via replay analysis — dump one with
-  `run_match.py <opp> --replay out.json` and inspect money/tile-state over time — and one by
+- **Seven real bugs found so far, not just tuning** (most via replay analysis — dump one with
+  `run_match.py <opp> --replay out.json` and inspect money/tile-state over time — a couple by
   diffing the agent's own logic against the installed engine source; local win/loss against weak
   baselines does NOT surface these, since the baselines are weak enough to lose even to a buggy
   agent):
@@ -70,17 +71,72 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
      that day. Cost 1 of 4 possible yield units on *every single wheat cycle*, tile, all game —
      the single highest-leverage bug found, worth ~20% avg reward on its own. Fix: only route to
      harvest once watered today (or once the window has fully passed).
+  5. The shed-surplus SELL loop queued `SELL` orders for COW/GOOSE/SHEEP sitting in the shed
+     awaiting PICKUP+PLACE. The engine's SELL only accepts real products, so these silently no-op
+     — but `maxMarketOrdersPerTurn` truncation happens on the raw list *before* validation, so a
+     dead order could still crowd out a real one later in the list. Fix: exclude animal names from
+     the shed-surplus sell loop.
+  6. Two "one-size-fits-all" dispatch bugs: the feed tier's wheat-pickup fallback and the place
+     tier's animal-pickup fallback both computed a needed quantity once and handed it unchanged to
+     *every* actor `assign()` matched that turn, instead of splitting/capping it. Two-plus actors
+     already standing on distinct shed-access tiles would each get the full un-decremented
+     request — over-fetching wheat, or (for animals, where PICKUP silently caps at available
+     stock) wasting a whole actor-turn on a request that resolves to 0. Fix: a shared, decrementing
+     budget gated through assign()'s `feasible` check, only actually decremented once a dispatch
+     is confirmed (an initial version decremented speculatively before confirming a match, which
+     could under-count real shed stock for a later tile the same turn — fixed on the second pass).
+  7. Hire-hand budget was computed independently from the same `money - CASH_RESERVE` pool that
+     seed/animal/land purchases also draw from, using a separate non-decremented copy. Since HIRE
+     is deliberately queued last in the market list and the engine executes a turn's orders
+     strictly in list order (deducting real money as each commits), a big same-turn purchase could
+     already spend money HIRE's sizing loop still believed was available, silently under-hiring
+     with no error. Fix: one running `available` threaded through seed → animal → land → hire in
+     their actual execution order.
   A first attempt at adding cows (before bugs 1-3 were fixed) looked like a clean regression in
   isolated A/B testing and was reverted; retrying the *identical* idea after fixing bugs 1-3
   turned it into the single biggest win of that session. Lesson: when a plausible feature
   regresses, suspect an interacting bug before concluding the feature itself is bad — a replay
   dump (or, per bug 4, just re-reading the engine source next to the agent's own logic) can answer
   it in minutes.
+- **Studying real leaderboard opponents beats guessing at the next feature.** After submitting,
+  pull the submission's played episodes and inspect them like any other replay: `kaggle
+  competitions episodes <submission_id>` lists episode IDs, `kaggle competitions replay
+  <episode_id> -p <dir>` downloads each one as the same JSON shape `run_match.py --replay`
+  produces (`info.TeamNames` tells you which `farms[i]` is you vs. the opponent — public tiles are
+  visible for both sides even though `private` inventory/shed is not). Comparing our farm's tile
+  composition over time against a top-scoring opponent's (one scored 118k vs. our 21k in the same
+  episode) is what surfaced the cow+sheep livestock strategy below and the wind-down-crops-near-
+  season-end idea (not yet implemented) directly from data, instead of speculating from the rules.
+- **Livestock scale-up (cow+sheep, dropping goose) took several replay-guided rounds to get
+  right — herd size is not a dial that just goes up.** The opponent replay above showed 9 cows +
+  4 sheep and zero geese (goose's ~$50/day is the weakest of the three vs. cow's ~$80 and sheep's
+  ~$67). Naively raising `ANIMAL_PLANS` targets straight to that scale (8+5+6=19 structures)
+  caused a death spiral: reserving that much land/actor-turns from turn 0, before any wheat income
+  existed, let weeds compound (14 by day 20 in one replay), collapsed wheat capacity (46→4 tiles),
+  and starved the whole herd out (14→1 animals) — confirmed via replay, not guessed. Backing off to
+  smaller targets *still* underperformed the original pilot at first, for two separate reasons
+  also only visible via replay: cow and sheep share `PASTURE`, and an empty pasture was being
+  earmarked for whichever plan was furthest from its own *overall target* — cow's target rarely
+  finished, so sheep never got a turn even sitting bought-and-ready in the shed (all 5 target sheep
+  sat dead the whole game in one run); separately, an incremental structure-build throttle (added
+  to fix the turn-0 reservation problem) delayed even small targets from ever fully building out.
+  Both were code bugs, fixed by deciding the animal-per-tile at PLACE time from what's actually on
+  hand (not from target distance) and by dropping the incremental-build throttle now that targets
+  are sized to what current actor count can sustain. With those fixed, 6 cow + 3 sheep (no goose)
+  beat the original pilot by ~20%. Also found: reward is *not monotonic* in herd size near this
+  actor count's ceiling — 8 cow + 3 sheep (11 total) collapsed *worse* than 9 cow + 4 sheep (13
+  total) did in local testing, so this is a genuine cliff/chaos region, not a smooth curve; treat
+  any number in that range as unreliable rather than trying to rank them further. See `ANIMAL_PLANS`
+  in `main.py` for the blow-by-blow.
 - Not yet using: SW/SE land (deliberately, see above — revisit if `MAX_HANDS` or
-  `TILES_PER_ACTOR` change), fertilizer for crops, sheep, or other crops (carrot/tomato/melon).
-  Since we're winning cleanly against both local baselines, further layers should be validated the
-  same way this round was — replay-inspected, not just win/loss — since the real leaderboard
-  (thousands of tuned competitor bots) is a much higher bar than these two fixed baselines.
+  `TILES_PER_ACTOR` change), fertilizer for crops, other crops (carrot/tomato/melon — the studied
+  opponent used melon and carrot early before switching entirely to livestock), or an endgame
+  crop/hand wind-down (the same opponent had 0 hands and 0 planted crops by day 29, presumably
+  because a freshly-planted crop can't mature before season end that late). Since we're winning
+  cleanly against both local baselines, further layers should be validated the same way this round
+  was — replay-inspected, not just win/loss — since the real leaderboard (thousands of tuned
+  competitor bots, currently ranking us ~7000th of ~9700 at a 491 score vs. leaders around 3000)
+  is a much higher bar than these two fixed baselines.
 - **Tried and reverted: spending fertilizer on wheat.** Engine confirms `FERTILIZE` raises wheat's
   max yield 4→6 (worth doing), and it's free — collected off animals via `COLLECT_FERTILIZER`
   (already implemented as an idle-time bonus action, tier 8). But adding a tier to actually spend

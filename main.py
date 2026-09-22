@@ -3,13 +3,12 @@ Kaggriculture submission entrypoint. Must expose `agent(obs)` returning
 {"farmer": [op, ...], "hands": [[op, ...], ...], "market": [[op, ...], ...]}.
 
 Strategy: a multi-tile, multi-actor wheat farm (farmer + hired hands) that
-also runs a small livestock operation (cows, then geese) fed from its own
-wheat surplus. Cows are prioritized over geese: milk nets roughly double
-the daily profit per unit of wheat spent feeding it, even though cows cost
-more up front and take longer to mature. Animal purchases are gated until
-wheat is actually flowing (see wheat_flowing below) -- replay analysis
-showed an animal bought on day 0 has no feed source at all and is
-guaranteed to starve within 2 days, burning its full purchase cost.
+also runs a livestock operation (cows and sheep sharing pasture -- geese
+support still exists in the code but is dialed to 0, see ANIMAL_PLANS)
+fed from its own wheat surplus. Animal purchases are gated until wheat is
+actually flowing (see wheat_flowing below) -- replay analysis showed an
+animal bought on day 0 has no feed source at all and is guaranteed to
+starve within 2 days, burning its full purchase cost.
 
 Every turn, every active unit is greedily matched to the nearest task in
 this priority order: feed unfed animals (losing one to starvation costs
@@ -50,15 +49,42 @@ MAX_SEED_STOCKPILE = 30
 MAX_HANDS = 10
 TILES_PER_ACTOR = 5
 
-# Priority order matters: earlier plans get first pick of nearby empty land
-# and first claim on spare cash. Cows before geese since milk nets roughly
-# double the daily profit per unit of wheat spent feeding it. Cow target
-# kept small (2) as a pilot -- an earlier, larger attempt (3+3) regressed,
-# though that was confounded by the feed-priority and land-utilization bugs
-# fixed since, so it's worth a smaller retry now those are gone.
+# Priority order matters: earlier plans get first pick of nearby empty land,
+# first claim on spare cash, and (for plans sharing a structure) first claim
+# on newly-built structures of that type -- see structure_plans below.
+#
+# A leaderboard replay of a top opponent (118k final money vs our 21k with
+# the original 2 cow / 4 goose pilot) showed them running 9 cows + 4 sheep
+# and no geese at all -- motivating both adding sheep and dropping goose
+# (weakest $/day of the three: ~$50 vs cow's ~$80 and sheep's ~$67).
+# Getting there took several replay-guided rounds, each testing ONE
+# variable at a time since this game's actor-turn economy makes herd size
+# a genuinely non-monotonic function of reward, not a dial that just goes up:
+#   - 8 cow + 5 sheep + 6 goose (19 total structures) reserved that much
+#     land/actor-turns from turn 0, before any wheat income existed --
+#     death spiral (weeds compounded, wheat capacity collapsed 46->4 tiles,
+#     herd starved 14->1 animals). Building structures incrementally
+#     instead of all at once for large targets is still worth revisiting,
+#     but was dropped here in favor of simply sizing targets to what the
+#     current actor count can sustain.
+#   - Dropping to 4 cow + 2 sheep + 4 goose still underperformed the
+#     original pilot -- turned out to be a separate bug (see structure_plans:
+#     an empty pasture was earmarked by overall-target distance, so cow's
+#     large target starved sheep of ever being placed) plus an incremental-
+#     build throttle that (harmlessly for cow/sheep, but not for goose)
+#     delayed reaching even a small target. Both fixed in code, not by
+#     retuning numbers.
+#   - With those fixed: 6 cow + 3 sheep + 0 goose beat the original pilot by
+#     ~20%, and higher still (9+4) works locally too -- but 8+3 (11 total)
+#     collapsed WORSE than 9+4 (13 total) did, i.e. reward is not monotonic
+#     in headcount near this actor count's ceiling. Settled here rather
+#     than chase that cliff further; raising it again needs more hands
+#     and/or a lower TILES_PER_ACTOR to go with it, re-validated by replay
+#     for the same collapse pattern each time, not just win/loss.
 ANIMAL_PLANS = [
-    {"animal": "COW", "structure": "PASTURE", "cost": 400, "target": 2},
-    {"animal": "GOOSE", "structure": "COOP", "cost": 300, "target": 4},
+    {"animal": "COW", "structure": "PASTURE", "cost": 400, "target": 6},
+    {"animal": "SHEEP", "structure": "PASTURE", "cost": 500, "target": 3},
+    {"animal": "GOOSE", "structure": "COOP", "cost": 300, "target": 0},
 ]
 BUILD_OP = {"PASTURE": "BUILD_PASTURE", "COOP": "BUILD_COOP"}
 # Animals sit in the shed (via BUY_ANIMAL) awaiting PICKUP+PLACE just like any
@@ -134,17 +160,39 @@ def agent(obs):
         if sellable > 0:
             market.append(["SELL", item, sellable])
 
+    # ---- How many of each animal do we already have, one count reused below
+    # for both buy-gating and structure/placement decisions ----
+    placed_by_animal = {}
+    for _, _, t in tiles:
+        if isinstance(t, dict) and "animal" in t:
+            placed_by_animal[t["animal"]] = placed_by_animal.get(t["animal"], 0) + 1
+    animal_owned = {
+        p["animal"]: (
+            shed.get(p["animal"], 0)
+            + sum(inv.get(p["animal"], 0) for inv in inventories)
+            + placed_by_animal.get(p["animal"], 0)
+        )
+        for p in ANIMAL_PLANS
+    }
+
     # ---- Decide how much land is wheat vs. reserved for new structures ----
+    # Cow and sheep share PASTURE, so the land reserved for a structure is
+    # the SUM of every plan targeting it, not each plan's target taken in
+    # isolation (which would double-book the same tiles against both).
     empty_tiles = [(x, y) for x, y, t in tiles if t is None]
     shed_center = (board_size // 2, board_size // 2)
     empty_by_dist = sorted(empty_tiles, key=lambda t: _manhattan(t[0], t[1], *shed_center))
 
-    build_targets = []  # (x, y, "BUILD_COOP" | "BUILD_PASTURE")
+    structure_targets = {}
     for plan in ANIMAL_PLANS:
-        existing = sum(1 for _, _, t in tiles if isinstance(t, dict) and t.get("kind") == plan["structure"])
-        slots_wanted = max(0, plan["target"] - existing)
+        structure_targets[plan["structure"]] = structure_targets.get(plan["structure"], 0) + plan["target"]
+
+    build_targets = []  # (x, y, "BUILD_COOP" | "BUILD_PASTURE")
+    for structure, target in structure_targets.items():
+        existing = sum(1 for _, _, t in tiles if isinstance(t, dict) and t.get("kind") == structure)
+        slots_wanted = max(0, target - existing)
         claimed, empty_by_dist = empty_by_dist[:slots_wanted], empty_by_dist[slots_wanted:]
-        build_targets.extend((x, y, BUILD_OP[plan["structure"]]) for x, y in claimed)
+        build_targets.extend((x, y, BUILD_OP[structure]) for x, y in claimed)
     plant_targets = empty_by_dist
 
     # ---- Shared cash pool for everything this turn spends. Seed, animal,
@@ -175,9 +223,7 @@ def agent(obs):
     if wheat_flowing:
         for plan in ANIMAL_PLANS:
             animal = plan["animal"]
-            placed = sum(1 for _, _, t in tiles if isinstance(t, dict) and t.get("animal") == animal)
-            total = shed.get(animal, 0) + sum(inv.get(animal, 0) for inv in inventories) + placed
-            if total < plan["target"] and plan["cost"] <= available:
+            if animal_owned[animal] < plan["target"] and plan["cost"] <= available:
                 market.append(["BUY_ANIMAL", animal, 1])
                 available -= plan["cost"]
 
@@ -210,7 +256,19 @@ def agent(obs):
     market.extend(hire_orders)
 
     # ---- Build per-tile task tiers ----
-    structure_to_animal = {p["structure"]: p["animal"] for p in ANIMAL_PLANS}
+    # Cow and sheep share PASTURE. Earmarking an empty pasture for whichever
+    # shared plan is furthest from its overall TARGET (an earlier version of
+    # this) is a trap: cow's target (8) is big enough that it rarely
+    # finishes, so every empty pasture kept getting earmarked "COW" even on
+    # turns where a SHEEP was the one actually sitting in the shed ready to
+    # go -- confirmed via replay: all 5 target sheep got bought (correctly
+    # capped at target) but sat dead in the shed the entire game, since no
+    # actor could ever satisfy PLACE COW there. Deciding the animal at
+    # PLACE time instead, from what's actually on hand, avoids this.
+    structure_plans = {}
+    for plan in ANIMAL_PLANS:
+        structure_plans.setdefault(plan["structure"], []).append(plan)
+
     harvest_targets, feed_targets, water_targets, place_targets, weed_targets = [], [], [], [], []
     for x, y, tile in tiles:
         if isinstance(tile, dict):
@@ -233,8 +291,8 @@ def agent(obs):
                     harvest_targets.append((x, y))
                 if not tile["fed_today"]:
                     feed_targets.append((x, y))
-            elif tile.get("kind") in structure_to_animal:
-                place_targets.append((x, y, structure_to_animal[tile["kind"]]))
+            elif tile.get("kind") in structure_plans:
+                place_targets.append((x, y, tile["kind"]))
             elif tile.get("kind") == "WEED":
                 weed_targets.append((x, y))
 
@@ -310,23 +368,29 @@ def agent(obs):
 
     # 4. Place a carried animal into its empty structure; if nobody is
     #    carrying one yet, send an idle actor to the shed to pick one up.
-    has_animal = lambda ai, t: inventories[ai].get(t[2], 0) > 0
-    unplaced_left = assign(place_targets, lambda ai, t: ["PLACE", t[2]], feasible=has_animal)
-    # Unlike wheat above, each empty structure needs its OWN actor carrying
-    # its OWN animal (PLACE consumes exactly 1), so multiple simultaneous
-    # fetchers per animal type are genuinely useful here -- but must be
-    # capped at actual shed stock. Without the shared, decrementing budget,
-    # two empty structures wanting the same animal each triggered their own
-    # assign() call reading the same un-decremented shed count, so with only
-    # 1 in stock both could dispatch a fetcher; the second's PICKUP silently
-    # caps at 0 in the engine, wasting that actor's whole turn.
-    needed_by_animal = {}
-    for _, _, animal in unplaced_left:
-        needed_by_animal[animal] = needed_by_animal.get(animal, 0) + 1
-    for animal, needed in needed_by_animal.items():
-        budget = [min(needed, shed.get(animal, 0))]
-        if budget[0] <= 0:
+    #    Cow and sheep share PASTURE, so which animal a given tile gets is
+    #    decided here from what's actually on hand (see structure_plans
+    #    above for why deciding it any earlier is a trap).
+    def animal_for(ai, structure):
+        for plan in structure_plans[structure]:
+            if inventories[ai].get(plan["animal"], 0) > 0:
+                return plan["animal"]
+        return None
+
+    has_animal = lambda ai, t: animal_for(ai, t[2]) is not None
+    unplaced_left = assign(place_targets, lambda ai, t: ["PLACE", animal_for(ai, t[2])], feasible=has_animal)
+
+    # Fallback: send an idle actor to fetch whichever shared-structure animal
+    # is actually sitting in the shed, for each still-empty structure tile.
+    # `shed_stock` decrements locally as tiles claim it (mirroring the
+    # wheat-fetch fix above) so two tiles wanting the same animal don't both
+    # dispatch a fetcher against the same single unit of stock.
+    shed_stock = {p["animal"]: shed.get(p["animal"], 0) for p in ANIMAL_PLANS}
+    for _, _, structure in unplaced_left:
+        animal = next((p["animal"] for p in structure_plans[structure] if shed_stock[p["animal"]] > 0), None)
+        if animal is None:
             continue
+        budget = [1]
 
         def pickup_animal(ai, t, animal=animal, budget=budget):
             budget[0] -= 1
@@ -337,6 +401,11 @@ def agent(obs):
             pickup_animal,
             feasible=lambda ai, t, budget=budget: budget[0] > 0,
         )
+        # Only decrement once the dispatch actually happened (budget hit 0)
+        # -- if no actor was free to send this turn, the unit is still in
+        # the shed and a later tile this same turn should still see it.
+        if budget[0] == 0:
+            shed_stock[animal] -= 1
 
     # 5. Build new structures on reserved land.
     assign(build_targets, lambda ai, t: [t[2]])
