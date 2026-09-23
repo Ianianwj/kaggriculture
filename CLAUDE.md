@@ -411,6 +411,30 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     `obs["day"] > WHEAT_MAX_YIELD_DAY`, bootstrap-harvest code removed rather than left as unused
     surface area). Confirms day-0 parallel-start generalizes to *plant* additions (melon) but not
     to animals, whose placement machinery costs meaningfully more actor-turns per unit added.
+  - **Tried and reverted (seventh SW attempt): SW routed to plain wheat, combined with the
+    hire-priority fix for the first time.** Every earlier SW-alone attempt predates the
+    hire-priority fix; the hire-priority-fix retry used SW+strawberry, not wheat -- this specific
+    combination (simplest possible: SW just becomes more wheat land, `MAX_HANDS` 10->14) had never
+    actually been tested, and the base economy is meaningfully stronger now (day-0 melon, carrot,
+    routed fertilizer). Result: still a regression, ~30,364/~30,656 avg reward (down from
+    34,067.4/34,046.9), though notably less severe than the ~25-26k range every previous SW
+    attempt landed at. Replay showed genuine progress on the previously-diagnosed bug -- hand
+    count was now stable all game (6-10 range, no more 0-3 crashes) -- but a *different*,
+    deeper limit took over: hands never exceeded 10 even with `MAX_HANDS=14`, and weeds/empty
+    tiles stayed persistently high (17-23 weeds, 19-35 empty tiles from day 16-28). This isn't a
+    cash-flow-timing bug anymore, it's the plain economics from the very first MAX_HANDS comment
+    in this file: a hand tending wheat is worth ~$90-100/day (5 tiles x $20/tile/day per the
+    README's own Wheat yield/tile/day figure), while the 11th-14th hands cost $89-377/day
+    (Fibonacci) -- more wheat land doesn't change that per-hand math at all, so hiring naturally
+    plateaus around 9-10 regardless of how much wheat-only land exists to tend, leaving SW's extra
+    25 tiles chronically under-cultivated. The fix isn't cash flow (already solved) or hand count
+    (already raised) -- it's that WHEAT specifically can't generate enough $/tile/day to justify
+    paying for hand 11+. Suggests the next hypothesis: pair new land with a *higher-margin* crop
+    (melon's 10x price premium over wheat) rather than more wheat or a similar-maintenance crop
+    like strawberry, so the extra hands' cost is justified by what they're tending, not just how
+    much land exists. Not yet tried in this specific form (previous melon-scale-up attempts
+    predate day-0 melon timing and competed with wheat on the SAME NW/NE land in the SAME narrow
+    week, rather than getting new, otherwise-idle SW land to itself).
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
