@@ -477,6 +477,49 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     future multi-tile crop addition should phase its land claim in over days rather than reserving
     the whole target on day 0, and the full ramped implementation is saved as a patch at
     `scratchpad/strawberry_ramped.patch` for when land expansion is solved.
+  - **Two observations from watching the replay footage side by side, both real:** (1) we build far
+    fewer structures than the #1 team, and (2) we waste the season's final turns clearing weeds.
+    Confirmed both from the replays. On structures: they build 14 PASTURE + 10 COOP and keep 23
+    animals (7 cow / 7 sheep / 9 goose) with *never a single empty structure* at any sample, while
+    we build 9 pastures and no coops at all, with goose dialled to 0 -- and animal products are
+    their largest revenue category (~48,400, above even strawberry). On weeds: our own endgame
+    action mix was DIG=14 across days 26-29, more than the whole rest of the game (6 digs, days
+    0-25), against just 3 PLANTs -- because once nothing can be planted, `plant_targets` and
+    `carrot_targets` both go empty and the weed tier is the only tier left holding targets, so
+    idle actors fall into digging tiles that can never grow anything again.
+  - **The weed fix is correct but measures neutral.** Gated the weed tier on `carrot_window_open`,
+    since DIG's entire payoff is making a tile plantable and carrot is the shortest cycle we
+    plant -- past that day, digging is a turn spent for nothing. Over 40 trials:
+    42,818.9/42,305.2 vs 42,796.3/42,814.9, i.e. flat within noise. Kept anyway: it's strictly
+    correct, costs nothing, and the freed turns become worth something the moment there are more
+    animals to collect fertilizer from. Useful negative result in its own right -- it says those
+    endgame actor-turns were low-value *either way*, so the waste was real but the opportunity
+    cost of it was ~zero. Chasing provable waste is not the same as chasing reward.
+  - **Tried and reverted: building out the herd toward the #1 team's scale.** Worked the feed
+    arithmetic first, which is the real constraint and worth writing down: every animal eats 1
+    wheat/day *regardless of type* and makes 1 fertilizer/day (base $100) regardless of type, and
+    wheat yields ~1 unit/tile/day -- so N animals need ~N wheat tiles purely for feed. On 50 tiles
+    minus 12 melon minus the structures themselves, that caps us near 16 animals; the #1 team
+    sustains 23 because they farm 75 tiles. Value per wheat fed (the figure that matters when feed
+    is the binding constraint) is cow $80/day > sheep $67 > goose $50, so the mix filled cow first.
+    Results, all 20-trial against the 42,796/42,815 baseline:
+      - 8 cow / 5 sheep / 3 goose (16 animals), targets raised with no ramp: **~18,301** --
+        catastrophic, and the same front-loading failure strawberry hit. The structure reservation
+        claims land for the whole target at once, so 16 structures plus 12 melon locked 28 of 50
+        tiles before wheat got any; no wheat means no feed means the herd starves.
+      - Same 16 with a 1.5-animals/day ramp from day 2 (mirroring their observed build-out: 5
+        animals by day 3, 13 by day 9, 19 by day 12, 23 by day 15): **~30,403/~29,237**. The ramp
+        rescued ~12k, confirming front-loading was the mechanism, but still far short.
+      - 7 cow / 4 sheep / 2 goose (13 animals), ramped: **~35,346/~36,143**. Still short.
+      - Current 6/3/0 (9 animals) *with* the ramp applied: **~39,605/~40,612** -- worse than
+        without it. At 9 structures there's no front-loading problem to solve, so ramping only
+        delays the herd's income.
+    So the curve is cleanly monotonic *downward* in herd size past 9 at our land area, and the
+    ramp only pays when the herd is big enough to starve wheat by front-loading. Animals are
+    land-gated exactly like strawberry: the extra mouths are worth having only once there's the
+    wheat acreage to feed them, which is the same 75-vs-50 tile gap behind every other failed
+    scale-up here. Reverted to 6/3/0 un-ramped; ramp implementation saved at
+    `scratchpad/animal_rampup.patch`.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is

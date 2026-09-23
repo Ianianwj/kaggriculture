@@ -651,7 +651,21 @@ def agent(obs):
     #    (no immediate payoff), but left unchecked these compound: replay
     #    analysis showed 31 of 100 owned tiles lost to weeds by day 29 with
     #    no clearing at all.
-    assign(weed_targets, lambda ai, t: ["DIG"])
+    #
+    #    Only while the tile could still grow something. DIG's whole payoff
+    #    is making a tile plantable again, so once even carrot (the shortest
+    #    cycle planted here) can no longer mature before season end, digging
+    #    is a turn spent for nothing. Replay showed that going unchecked:
+    #    DIG spiked to 14 calls over days 26-29 -- more than the entire rest
+    #    of the game (6) -- against just 3 PLANTs, because once nothing can
+    #    be planted the weed tier is the only tier still holding targets and
+    #    otherwise-idle actors fall into it. Measured neutral on reward on
+    #    its own (the freed turns have little better to do at this herd
+    #    size), kept because it's strictly correct and the freed turns get
+    #    more valuable as soon as there are more animals to collect
+    #    fertilizer from.
+    if carrot_window_open:
+        assign(weed_targets, lambda ai, t: ["DIG"])
 
     # 8. Opportunistic bonus for actors with nothing better to do this turn:
     #    care for a fed animal (banks a yield bonus for its next production).
