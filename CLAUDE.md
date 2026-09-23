@@ -385,6 +385,32 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     plants there at all rather than wasting more seed money. Validated over 40 trials:
     34,148.9/34,046.9 avg reward (up from 34,067.4/33,106.1), 40W-0L both baselines -- a further,
     if more modest, genuine win stacked on top of the day-0-melon fix.
+  - **Tried and reverted: buying animals from day 0, matching the #1 team's replay exactly (COW
+    and SHEEP bought within their first two hours of day 0).** This was previously impossible
+    without touching wheat's harvest timing: every harvest waits for the yield peak
+    (`WHEAT_MAX_YIELD_DAY`, day 4) for a ~20% reward win found early in this project, meaning
+    literally zero wheat exists anywhere before day 4 -- an animal missing 2 consecutive feedings
+    escapes for good, so day-0 animals were guaranteed to starve. Added a narrow bootstrap
+    exception instead of reverting the peak-timing globally: when zero wheat exists anywhere
+    (shed or any actor's inventory) AND at least one animal needs feeding today
+    (`wheat_bootstrap_needed`), take one early harvest at `WHEAT_FIRST_YIELD_DAY` (age 2, the
+    engine's own earliest-legal-harvest age) instead of waiting for the peak -- smaller yield on
+    that one tile, but enough to generate feed in time. Confirmed via replay this technically
+    works (the bootstrap harvest fires and animals get fed early), but the OVERALL result is
+    still a severe regression: 20,309.7 avg reward (down from 34,046.9) vs `starter`, still 0
+    losses but real damage. Root cause, from the same replay: cows and sheep still died and got
+    rebought repeatedly all game (`PASTURE+COW` oscillating 1->4->1->2->5->6...) and weeds spiked
+    to 30 tiles by day 10-12 -- not a feed-timing bug, but the same actor-capacity problem seen in
+    every SW-land attempt: building a pasture, buying and placing two animal types, AND
+    establishing wheat all compete for the same single farmer on day 0 (hands don't exist yet),
+    which is worse contention than day-0 wheat+melon (a plant just needs watering, not also
+    building/buying/placing machinery). The #1 team can pull this off because -- per their own
+    replay -- they're not solely dependent on one farmer that early either, or their sequencing of
+    which specific action happens which hour absorbs the contention in a way this agent's
+    tier-priority-per-turn model doesn't. Reverted entirely (wheat_flowing back to
+    `obs["day"] > WHEAT_MAX_YIELD_DAY`, bootstrap-harvest code removed rather than left as unused
+    surface area). Confirms day-0 parallel-start generalizes to *plant* additions (melon) but not
+    to animals, whose placement machinery costs meaningfully more actor-turns per unit added.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
