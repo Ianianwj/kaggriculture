@@ -40,18 +40,20 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   operation (`ANIMAL_PLANS`: 6 cows + 3 sheep sharing PASTURE; goose support still exists in code
   but is dialed to 0 target, see below) fed from its own wheat surplus, plus a small one-shot
   melon batch (`MELON_TARGET`) planted in parallel with wheat from day 0 for market
-  diversification, spends fertilizer collected from its
-  own animals to boost wheat's yield cap, and clears weeds via DIG to reclaim land. Every unit is
-  greedily matched to the nearest task: feed unfed animals > harvest (crops + animal product) >
-  water thirsty plants > fertilize a wheat tile in its watering-bonus window (using fertilizer
-  already carried) > place a carried animal into its empty structure > build new structures >
-  plant wheat, then melon > collect fertilizer from fed animals for a future turn > clear weeds.
-  Wheat (and melon) harvests are timed to the yield peak rather than the first eligible day, since
-  HARVEST costs one turn either way. Hiring is sized and its cost reserved from the shared cash
-  pool FIRST, before seed/animal/land purchases can spend into it (the `HIRE` orders themselves
-  still queue last in the market list, a separate concern -- see "Copying the #1 team's strategy"
-  below). Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~34,100 / ~33,100 over 40
-  trials — up from ~31,700 / ~32,000 after un-gating melon to plant in parallel with wheat from
+  diversification and a cheap CARROT batch on whatever land wheat's own window has closed on near
+  season end, spends fertilizer collected from its own animals to boost wheat's yield cap, and
+  clears weeds via DIG to reclaim land. Every unit is greedily matched to the nearest task: feed
+  unfed animals > harvest (crops + animal product) > water thirsty plants > fertilize a wheat tile
+  in its watering-bonus window (using fertilizer already carried) > place a carried animal into
+  its empty structure > build new structures > plant wheat, then melon, then carrot > collect
+  fertilizer from fed animals for a future turn > clear weeds. Wheat (and melon) harvests are
+  timed to the yield peak rather than the first eligible day, since HARVEST costs one turn either
+  way. Hiring is sized and its cost reserved from the shared cash pool FIRST, before seed/animal/
+  land purchases can spend into it (the `HIRE` orders themselves still queue last in the market
+  list, a separate concern -- see "Copying the #1 team's strategy" below). Benchmark: 40W-0L vs
+  both `random` and `starter`, avg reward ~34,100 / ~34,000 over 40 trials — up from ~34,100 /
+  ~33,100 after adding carrot as a cheap endgame crop on land wheat's own window has closed on
+  (see below), ~31,700 / ~32,000 after un-gating melon to plant in parallel with wheat from
   day 0 instead of waiting until day 5 (see "Copying the #1 team's strategy" below for why: the
   #1 team's own replay shows them doing exactly this, and staged sequential buildup rather than
   any single parameter turned out to be the real bottleneck behind six failed land-scaling
@@ -369,19 +371,35 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     genuine win, and the first successful "add something earlier" change after six failed
     "add something new later" attempts. Confirms the staged-buildup assumption itself, not any
     single crop/land/cash parameter, was the actual bottleneck for this lever.
+  - **Added CARROT as a cheap endgame crop, and fixed a real gap this exposed in our OWN code
+    (not something copied) -- nothing here ever stopped planting wheat near season end.** The #1
+    team's replay shows carrot planted only very late (days 25-26) -- a short one-time cycle
+    (`max_yield_day` 3, vs. wheat's 4) that still completes even planted almost right up to the
+    30-day season's end. Checking our own code found it has zero season-end awareness at all: it
+    keeps planting wheat every turn right up to the literal last one, even though a wheat seed
+    planted after day `SEASON_LAST_DAY - WHEAT_MAX_YIELD_DAY` (25) can never reach its yield-peak
+    age before the season ends -- wasted seed cost and actor-turns on a planting that won't
+    finish. Fixed both together: once wheat's own window closes (`wheat_window_open` false),
+    remaining empty land redirects to carrot instead (`carrot_window_open`, true through day 26)
+    rather than continuing to plant unfinishable wheat or sitting idle; past day 26, nothing
+    plants there at all rather than wasting more seed money. Validated over 40 trials:
+    34,148.9/34,046.9 avg reward (up from 34,067.4/33,106.1), 40W-0L both baselines -- a further,
+    if more modest, genuine win stacked on top of the day-0-melon fix.
+  - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
     always mid-reset. Sampling any other hour shows them actually scaling 4→12 hands over the
     season, tracking their land/animal growth. No actionable difference found here beyond what
     `MAX_HANDS`/`TILES_PER_ACTOR` already does.
-- Not yet using: SW/SE land (see above), strawberry/tomato/carrot, a bigger animal herd matching
-  the #1 team's ~18-23, tighter cash management, a higher-priority fertilizer tier (see above), or
-  an endgame crop/hand wind-down (the studied opponent had 0 hands and 0 planted crops by day 29,
-  presumably because a freshly-planted crop can't mature before season end that late). Further
-  layers should be validated the same way this round was — replay-inspected, not just win/loss,
-  one variable at a time — since the real leaderboard (thousands of tuned competitor bots,
-  currently ranking us ~7000th of ~9700 at a 491 score vs. leaders around 3000) is a much higher
-  bar than these two fixed baselines.
+- Not yet using: SW/SE land (see above), strawberry/tomato, a bigger animal herd matching the #1
+  team's ~18-23, tighter cash management, a higher-priority fertilizer tier (see above), or a hand
+  wind-down near season end (the studied opponent had 0 hands by day 29 -- carrot now covers the
+  crop side of their endgame wind-down, see above, but hiring itself still runs at full size right
+  to the last day here, which may be paying for hands with nothing left worth doing that late).
+  Further layers should be validated the same way this round was — replay-inspected, not just
+  win/loss, one variable at a time — since the real leaderboard (thousands of tuned competitor
+  bots, currently ranking us ~7000th of ~9700 at a 491 score vs. leaders around 3000) is a much
+  higher bar than these two fixed baselines.
 - **Tried and reverted (first attempt): spending fertilizer on wheat.** Engine confirms
   `FERTILIZE` raises wheat's max yield 4→6 (worth doing), and it's free — collected off animals
   via `COLLECT_FERTILIZER` (at the time, only implemented as an idle-time bonus action, tier 8).

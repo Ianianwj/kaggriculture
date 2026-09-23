@@ -105,6 +105,22 @@ MELON_MAX_YIELD_DAY = 12
 MELON_TARGET = 6
 MELON_LAST_PLANT_DAY = 7
 
+# Step 4: an endgame crop. The #1 team plants CARROT only very late (days
+# 25-26 in their replay) -- a short one-time cycle (max_yield_day 3, vs.
+# wheat's 4) that still completes before the 30-day season ends even when
+# planted almost right up to the end. This exposed a real gap in our OWN
+# code, not a copied trick: nothing here ever stopped planting wheat near
+# season end, so a wheat seed planted after day SEASON_LAST_DAY -
+# WHEAT_MAX_YIELD_DAY (25) can never reach its yield-peak age before the
+# season is over -- wasted seed cost and actor-turns on a planting that
+# won't finish. Once wheat's own window closes, land that's still empty
+# switches to carrot instead (whose own, later-closing window still fits)
+# rather than sitting idle or wasting more wheat seed -- see wheat_window_
+# open/carrot_window_open below.
+SEASON_LAST_DAY = 29
+CARROT_SEED_COST = 20
+CARROT_MAX_YIELD_DAY = 3
+
 # Hire cost is Fibonacci per hand per day (1,1,2,3,5,8,13,21,34,55,89,144...).
 # A hand tending ~TILES_PER_ACTOR wheat tiles is worth roughly $90-100/day
 # gross, so the 11th hand (cost 144) is the first one that's a net loss --
@@ -268,7 +284,20 @@ def agent(obs):
     melon_target = MELON_TARGET if melon_wants_more else melon_existing
     melon_slots = max(0, melon_target - melon_existing)
     melon_targets, empty_by_dist = empty_by_dist[:melon_slots], empty_by_dist[melon_slots:]
-    plant_targets = empty_by_dist
+
+    # Remaining land defaults to wheat while its window is still open; once
+    # a wheat seed planted today could no longer reach its yield-peak age
+    # before the season ends, redirect to carrot instead (whose shorter
+    # cycle still fits) rather than planting wheat that can't finish or
+    # leaving the land empty. See SEASON_LAST_DAY above.
+    wheat_window_open = obs["day"] <= SEASON_LAST_DAY - WHEAT_MAX_YIELD_DAY
+    carrot_window_open = obs["day"] <= SEASON_LAST_DAY - CARROT_MAX_YIELD_DAY
+    if wheat_window_open:
+        plant_targets, carrot_targets = empty_by_dist, []
+    elif carrot_window_open:
+        plant_targets, carrot_targets = [], empty_by_dist
+    else:
+        plant_targets, carrot_targets = [], []
 
     # ---- Shared cash pool for everything this turn spends. Each section
     # below must decrement the SAME running `available` the next section
@@ -315,6 +344,15 @@ def agent(obs):
     if melon_to_buy > 0:
         market.append(["BUY_SEED", "MELON", melon_to_buy])
         available -= melon_to_buy * MELON_SEED_COST
+
+    # ---- Keep enough carrot seed for the endgame land carrot_window_open
+    # redirected to it (see above) -- naturally 0 before that window opens,
+    # since carrot_targets is empty until then.
+    carrot_seeds_owned = seeds.get("CARROT", 0)
+    carrot_to_buy = max(0, min(len(carrot_targets) - carrot_seeds_owned, available // CARROT_SEED_COST))
+    if carrot_to_buy > 0:
+        market.append(["BUY_SEED", "CARROT", carrot_to_buy])
+        available -= carrot_to_buy * CARROT_SEED_COST
 
     # ---- Buy animals up to each plan's target, once wheat is flowing ----
     # Wheat harvests are deliberately delayed until WHEAT_MAX_YIELD_DAY (see
@@ -383,8 +421,13 @@ def agent(obs):
                 # Melon is also a one-time crop with the exact same
                 # watering-bonus-window shape as wheat, just its own
                 # max_yield_day -- generalized here rather than duplicating
-                # wheat's block.
-                max_yield_day = MELON_MAX_YIELD_DAY if tile["crop"] == "MELON" else WHEAT_MAX_YIELD_DAY
+                # wheat's block. Same for carrot (see SEASON_LAST_DAY above).
+                if tile["crop"] == "MELON":
+                    max_yield_day = MELON_MAX_YIELD_DAY
+                elif tile["crop"] == "CARROT":
+                    max_yield_day = CARROT_MAX_YIELD_DAY
+                else:
+                    max_yield_day = WHEAT_MAX_YIELD_DAY
                 # The watering bonus window is inclusive of max_yield_day
                 # itself (engine: window_start <= age <= max_yield_day), so a
                 # plant at exactly that age still needs watering today before
@@ -566,7 +609,20 @@ def agent(obs):
 
     assign(melon_targets, do_plant_melon, feasible=can_plant_melon)
 
-    # 6c. Collect fertilizer from fed animals, for a future turn's 3b above
+    # 6c. Plant carrot on whatever land wheat's own window has closed on
+    #     (see SEASON_LAST_DAY above) -- same idea as wheat/melon above.
+    carrot_plant_budget = [carrot_seeds_owned]
+
+    def can_plant_carrot(ai, t):
+        return carrot_plant_budget[0] > 0
+
+    def do_plant_carrot(ai, t):
+        carrot_plant_budget[0] -= 1
+        return ["PLANT", "CARROT"]
+
+    assign(carrot_targets, do_plant_carrot, feasible=can_plant_carrot)
+
+    # 6d. Collect fertilizer from fed animals, for a future turn's 3b above
     #     to spend. A first attempt promoted this ahead of place/build/plant
     #     (right after 3b) to fix the original placement's under-volume (see
     #     CLAUDE.md) -- that was a clear regression (vs starter dropped from
