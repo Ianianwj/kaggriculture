@@ -100,9 +100,20 @@ MAX_SEED_STOCKPILE = 30
 # see wheat_flowing below) -- a plant just sits there needing water, so
 # there's no survival reason to delay it. Un-gating the lower bound to
 # test their actual timing rather than our own assumption about it.
+#
+# MELON_TARGET swept 6 -> 10 -> 12 -> 15 once that day-0 timing landed:
+# 34.1k / 37.1k / 42.8k / 36.5k avg reward respectively, so 12 is the
+# peak and the curve is non-monotonic on both sides of it (same
+# cliff/chaos shape this agent's capacity curves always have -- see
+# ANIMAL_PLANS). An earlier sweep found 10 a clear REGRESSION vs 6, but
+# that predated day-0 planting and the hire-priority fix: at day 5-7 the
+# extra tiles collided with that week's animal purchases for the same
+# actor-turns, whereas from day 0 they have the whole empty board to
+# themselves. Worth re-testing any "already known" tuning verdict that
+# was established before a structural fix like that one.
 MELON_SEED_COST = 80
 MELON_MAX_YIELD_DAY = 12
-MELON_TARGET = 6
+MELON_TARGET = 12
 MELON_LAST_PLANT_DAY = 7
 
 # Step 4: an endgame crop. The #1 team plants CARROT only very late (days
