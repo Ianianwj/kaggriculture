@@ -520,6 +520,47 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     wheat acreage to feed them, which is the same 75-vs-50 tile gap behind every other failed
     scale-up here. Reverted to 6/3/0 un-ramped; ramp implementation saved at
     `scratchpad/animal_rampup.patch`.
+  - **Territory-locked routing: implemented, and it settles the land question for good.** The #1
+    team's units are not globally task-matched like ours -- tracing their positions hour by hour
+    shows every unit starting the day on one of the four shed-access corners and sweeping its OWN
+    quadrant all day, never crossing into another's (actor 0 stays x0-4/y3-8, actor 1 x5-7/y0-3,
+    and so on, same shape the next day). That discipline is why they hold 75 tiles at literally
+    ZERO weeds and zero idle tiles with FEWER hands per tile than we use (75/12 vs our 50/10).
+    Built it as `assign_by_territory`: each actor gets a home quadrant (round-robin over UNLOCKED
+    quadrants, so it adapts if land is ever bought), each quadrant's work is offered to its own
+    actors first, and anything no local actor can take falls through to a final unrestricted pass
+    so no tile is abandoned. Results: **at 50 tiles it's a regression** (~37,430/~39,855 vs
+    42,796/42,815) -- unsurprising in hindsight, since at ~4.5 tiles/actor we aren't
+    capacity-starved and weeds are already near zero, so territory discipline only adds
+    boundary friction where the shed's quadrant lines run straight through the actor cluster.
+    **At 75 tiles it was the best SW result ever measured** (~35,336/~34,897, against ~25-26k for
+    early attempts and ~30.4k for the previous best) -- so the mechanism is real, just aimed at a
+    problem we don't have at our own size.
+  - **And chasing it down found the actual reason eight land attempts failed: HIRE orders were
+    being silently truncated.** Replay of the 75-tile farm showed hand count pinned at 9 while
+    `MAX_HANDS` was 14, `desired_hands` computed 14, and **$35,000** sat unspent in the bank --
+    the cumulative Fibonacci price of 14 hands is only ~$986, so affordability was never the
+    constraint. The cause: every HIRE is issued in a single turn, and `maxMarketOrdersPerTurn`
+    (10) truncates the raw order list *before validation*, so with a couple of sells/buys queued
+    only ~9 hires ever survive. Confirmed directly from the replay: `hires requested = 14`,
+    `max hands ever seen = 9`, order list sitting right on the limit. Fixed by topping hiring up
+    over the first few hours instead of demanding it all at once (hands persist for the day once
+    hired), and verified it works -- hand count reached **14**, jumping the moment SW was bought.
+    **But lifting the cap made things worse, not better: ~21,877/~22,041.** The reason closes the
+    whole line of inquiry: hands 11-14 cost $55+$89+$144+$233+$377 = **$843/day combined, ~$210
+    each**, against a hand worth ~$100/day, and 14 hands over the ~17 days after SW lands costs
+    ~$16,800 out of a farm that banks ~$35,000 total. The order-slot truncation had been
+    *accidentally protecting us* from an unprofitable decision that `desired_hands =
+    tiles // TILES_PER_ACTOR - 1` was asking for. So the honest conclusion after nine attempts:
+    land is not unviable because it can't be staffed, it's unviable because staffing it is
+    economically impossible at Fibonacci hire prices *given our per-tile yields*. 75 tiles needs
+    ~14 hands; hands 11-14 cost twice what they return on wheat. The #1 team escapes this because
+    their per-tile yield is far higher (37 tiles of strawberry at ~$1,200/tile/season), which
+    lifts a hand's marginal value above the Fibonacci price. **That is the real dependency order:
+    high-value-per-tile crops must come FIRST, and only then does the land that needs hands 11+
+    pay for itself.** Both changes reverted; saved at
+    `scratchpad/territory_plus_hirefix.patch`. The hire-spreading fix is worth re-applying
+    verbatim the day a crop mix makes hand 11 profitable.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
