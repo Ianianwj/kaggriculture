@@ -51,7 +51,9 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   way. Hiring is sized and its cost reserved from the shared cash pool FIRST, before seed/animal/
   land purchases can spend into it (the `HIRE` orders themselves still queue last in the market
   list, a separate concern -- see "Copying the #1 team's strategy" below). Benchmark: 40W-0L vs
-  both `random` and `starter`, avg reward ~34,100 / ~34,000 over 40 trials — up from ~34,100 /
+  both `random` and `starter`, avg reward ~42,800 / ~42,800 over 40 trials — up from ~34,100 /
+  ~34,000 after raising `MELON_TARGET` 6 -> 12 (a sweep that only became possible once melon
+  planted from day 0; see below), ~34,100 /
   ~33,100 after adding carrot as a cheap endgame crop on land wheat's own window has closed on
   (see below), ~31,700 / ~32,000 after un-gating melon to plant in parallel with wheat from
   day 0 instead of waiting until day 5 (see "Copying the #1 team's strategy" below for why: the
@@ -435,6 +437,46 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     much land exists. Not yet tried in this specific form (previous melon-scale-up attempts
     predate day-0 melon timing and competed with wheat on the SAME NW/NE land in the SAME narrow
     week, rather than getting new, otherwise-idle SW land to itself).
+  - **`MELON_TARGET` 6 -> 12 is the single biggest win found so far: +25% avg reward (34.1k ->
+    42.8k), 40W-0L.** Swept 6/10/12/15 = 34.1k / 37.1k / 42.8k / 36.5k, so 12 is a genuine peak
+    with the curve falling off on both sides. **The important part is that this exact change was
+    already tested and documented as a clear regression earlier** (target 10 lost to 6 at
+    ~13,300/~12,900) -- that verdict was simply stale, because it predated both day-0 melon
+    planting and the hire-priority fix. At the old day-5-7 window the extra melon tiles collided
+    with that week's first animal purchases for the same actor-turns; planted from day 0 they have
+    the empty board to themselves. Two lessons worth carrying: (a) re-test tuning verdicts whenever
+    a structural fix lands underneath them, because "known bad" numbers can silently become good,
+    and (b) this independently converged on the #1 team's own figure -- their replay peaks at
+    exactly 10 simultaneous melon tiles, right next to our measured optimum of 12.
+  - **What the #1 team's revenue actually comes from** (summing every SELL order in their replay
+    against the price at time of sale): strawberry ~44,800, wheat ~21,700, wool ~18,500, milk
+    ~17,100, **fertilizer ~13,600**, egg ~12,800, melon ~12,500, tomato ~900, carrot ~600 —
+    ~142,400 gross. Worth noting against our own priorities: animal products together (~48,400)
+    outweigh their biggest crop; they *sell* fertilizer for real money where we only spend ours on
+    wheat; their egg income comes from 9 geese where `ANIMAL_PLANS` has goose dialed to 0; and
+    tomato/carrot are rounding errors for them too, matching our own findings on both.
+  - **Tried and reverted: strawberry, third attempt — and the ramp finding is the valuable part.**
+    Strawberry is the #1 team's single biggest earner (~44,800, above), so it was worth retrying
+    with every earlier failure mode addressed: persistent land reservation (no narrow window, so no
+    seed-stranding), day-0 availability, no confounding land purchase, and — new — fertilizer
+    extended to it, since the engine doubles each scheduled production 1 -> 2 when a tile is both
+    watered and fertilized that day, and the #1 team's ~44,800 at their realised ~$150/unit implies
+    ~300 units from 37 tiles where 4 productions each would only give 148 unfertilized. First run at
+    `STRAWBERRY_TARGET=12` was a catastrophic ~19.8k. Replay found the cause immediately and it was
+    not strawberry's economics: claiming all 12 tiles at once put 12 x $100 of seed on top of
+    melon's 12 x $80 within the first two turns, money crashed $3000 -> $51 by day 2, and 24 fresh
+    tiles all needing daily water at once ran weeds to 28 by day 6, collapsing wheat from 16 tiles
+    to 0. Adding a gradual ramp (1 tile/day from day 2, mirroring the #1 team's own ~3/day over
+    days 2-15) recovered it to ~37,058/~37,164 -- an enormous rescue, but still ~5.7k below the
+    melon-only 42.8k baseline. Halving the target to 6 improved it again to ~38,354/~38,393, still
+    ~4.4k short, so it's a regression at every size tested rather than just mis-tuned. The gap
+    looks like plain land budget: 12 melon + 12
+    strawberry + 9 animal structures is 33 of our 50 tiles, leaving ~17 for wheat, which is also
+    the animals' feed supply; the #1 team affords 37 strawberry tiles because they have 75 tiles to
+    work with. Reverted to melon-only. The ramp mechanism itself is the transferable lesson -- any
+    future multi-tile crop addition should phase its land claim in over days rather than reserving
+    the whole target on day 0, and the full ramped implementation is saved as a patch at
+    `scratchpad/strawberry_ramped.patch` for when land expansion is solved.
   - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
