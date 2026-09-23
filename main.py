@@ -6,12 +6,12 @@ Strategy: a multi-tile, multi-actor wheat farm (farmer + hired hands) that
 also runs a livestock operation (cows and sheep sharing pasture -- geese
 support still exists in the code but is dialed to 0, see ANIMAL_PLANS)
 fed from its own wheat surplus, plus a small one-shot melon batch (see
-MELON_TARGET) for market diversification. Animal purchases -- and melon
-planting -- are gated until wheat is actually flowing (see wheat_flowing
-below) -- replay analysis showed an animal bought on day 0 has no feed
-source at all and is guaranteed to starve within 2 days, and a separate
-attempt at introducing new crops before wheat's own income was established
-caused a much worse poverty trap (see MELON_TARGET's comment).
+MELON_TARGET) for market diversification, planted in PARALLEL with wheat
+from day 0 (matching the #1 team's own replay -- melon doesn't share
+wheat's starvation risk, only animals do). Animal purchases are gated
+until wheat is actually flowing (see wheat_flowing below) -- replay
+analysis showed an animal bought on day 0 has no feed source at all and
+is guaranteed to starve within 2 days.
 
 Every turn, every active unit is greedily matched to the nearest task in
 this priority order: feed unfed animals (losing one to starvation costs
@@ -85,15 +85,21 @@ CASH_RESERVE = 50
 MAX_SEED_STOCKPILE = 30
 
 # Step 2: add MELON alone (no strawberry/tomato yet) as a small, one-shot
-# batch on the existing 50-tile base, gated behind the same day wheat_flowing
-# opens for animal purchases -- wheat gets to establish fully first, then
-# melon claims a small, fixed slice of land, never replanted after that one
-# batch (matches the #1 team's own pattern: melon appeared once early and
-# was never replanted -- its 12-day max_yield_day plus a punishing glut
-# curve on oversupply make a second full cycle not worth the market risk).
-# Melon's own watering-bonus window works exactly like wheat's (both are
-# one-time crops), just with its own max_yield_day -- see the classification
-# loop below, generalized to check crop type rather than assuming wheat.
+# batch, never replanted after (matches the #1 team's own pattern: their
+# 12-day max_yield_day plus a punishing glut curve on oversupply make a
+# second full cycle not worth the market risk). Melon's own watering-bonus
+# window works exactly like wheat's (both are one-time crops), just with
+# its own max_yield_day -- see the classification loop below, generalized
+# to check crop type rather than assuming wheat.
+#
+# Originally gated behind WHEAT_MAX_YIELD_DAY (day 5+) on the theory that
+# wheat needed to "establish" first -- re-examining the #1 team's own
+# replay (see CLAUDE.md "Copying the #1 team's strategy") showed they
+# actually plant melon on days 0-1, in PARALLEL with wheat, not staged
+# after it. Melon doesn't carry wheat's starvation risk (only ANIMALS do,
+# see wheat_flowing below) -- a plant just sits there needing water, so
+# there's no survival reason to delay it. Un-gating the lower bound to
+# test their actual timing rather than our own assumption about it.
 MELON_SEED_COST = 80
 MELON_MAX_YIELD_DAY = 12
 MELON_TARGET = 6
@@ -258,7 +264,7 @@ def agent(obs):
     melon_existing = sum(
         1 for _, _, t in tiles if isinstance(t, dict) and t.get("kind") == "PLANT" and t.get("crop") == "MELON"
     )
-    melon_wants_more = WHEAT_MAX_YIELD_DAY < obs["day"] <= MELON_LAST_PLANT_DAY
+    melon_wants_more = obs["day"] <= MELON_LAST_PLANT_DAY
     melon_target = MELON_TARGET if melon_wants_more else melon_existing
     melon_slots = max(0, melon_target - melon_existing)
     melon_targets, empty_by_dist = empty_by_dist[:melon_slots], empty_by_dist[melon_slots:]

@@ -39,7 +39,8 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   `MAX_HANDS=10`, re-hired daily and sized to owned tile count) that also runs a livestock
   operation (`ANIMAL_PLANS`: 6 cows + 3 sheep sharing PASTURE; goose support still exists in code
   but is dialed to 0 target, see below) fed from its own wheat surplus, plus a small one-shot
-  melon batch (`MELON_TARGET`) for market diversification, spends fertilizer collected from its
+  melon batch (`MELON_TARGET`) planted in parallel with wheat from day 0 for market
+  diversification, spends fertilizer collected from its
   own animals to boost wheat's yield cap, and clears weeds via DIG to reclaim land. Every unit is
   greedily matched to the nearest task: feed unfed animals > harvest (crops + animal product) >
   water thirsty plants > fertilize a wheat tile in its watering-bonus window (using fertilizer
@@ -49,11 +50,14 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
   HARVEST costs one turn either way. Hiring is sized and its cost reserved from the shared cash
   pool FIRST, before seed/animal/land purchases can spend into it (the `HIRE` orders themselves
   still queue last in the market list, a separate concern -- see "Copying the #1 team's strategy"
-  below). Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~31,700 / ~32,000 over 40
-  trials — up from ~31,700 / ~31,900 after promoting the fertilizer-collection tier's priority
-  (this round's hire-priority reorder was a small, standalone win; SW land + strawberry paired
-  with it was tried and reverted, see below), ~28,650 / ~27,350 after adding a routed fertilizer
-  tier (see
+  below). Benchmark: 40W-0L vs both `random` and `starter`, avg reward ~34,100 / ~33,100 over 40
+  trials — up from ~31,700 / ~32,000 after un-gating melon to plant in parallel with wheat from
+  day 0 instead of waiting until day 5 (see "Copying the #1 team's strategy" below for why: the
+  #1 team's own replay shows them doing exactly this, and staged sequential buildup rather than
+  any single parameter turned out to be the real bottleneck behind six failed land-scaling
+  attempts), ~31,700 / ~31,900 after promoting the fertilizer-collection tier's priority (that
+  round's hire-priority reorder was a small, standalone win; SW land + strawberry paired with it
+  was tried and reverted, see below), ~28,650 / ~27,350 after adding a routed fertilizer tier (see
   "Copying the #1 team's strategy" below), ~26,150 / ~26,350 after adding melon,
   ~21,528 / ~21,789 after the market/dispatch bug fixes, ~17,450 / ~18,134 after fixing the day-4
   watering bug, ~10,127 / ~10,316 after capping land expansion to NE only, and ~5770 / ~5915 at
@@ -346,7 +350,25 @@ Submission/CLI workflow: [AGENTS.md](AGENTS.md) (agent contract, local testing, 
     would need staged/sequenced investment (e.g. explicitly hold SW's purchase price plus its
     first N days of seed costs in reserve, separate from the operating pool, before buying at
     all) rather than another threshold or reordering tweak.
-  - Also checked hand-hiring for a market-adaptivity angle: an early read of the #1 team's
+  - **The real architectural lesson, found by re-reading the #1 team's replay for their actual
+    buildup ORDER rather than their end-state composition: they run multiple income streams in
+    PARALLEL from day 0, not staged sequentially the way this agent does (wheat alone, then melon
+    at day 5, then animals, then -- attempted -- land later).** Their own `PLANT` action log shows
+    melon planted days 0-1, right alongside wheat, not gated behind any establishment period --
+    the day-5 gate this agent used was our own invented assumption, not something the #1 team
+    actually does. Every SW-land scale-up failure above was really a symptom of this: bolting a
+    new initiative onto an economy that's *already fully committed* to what's already running,
+    late, with no slack left, is fragile in a way that starting multiple things together from day
+    0 (when there's naturally less already competing for actor-turns and cash) is not. Tested the
+    cheapest version of this insight in isolation: un-gated melon's lower bound (`melon_wants_more
+    = obs["day"] <= MELON_LAST_PLANT_DAY`, dropping the old `WHEAT_MAX_YIELD_DAY <` floor) so it
+    plants in parallel with wheat from day 0 instead of waiting until day 5 -- safe to test alone
+    because melon doesn't carry wheat's starvation risk the way animals do (see wheat_flowing
+    below), so none of the animal-feeding logic needed to change. Validated over 40 trials:
+    34,067.4/33,106.1 avg reward (up from 31,536.5/32,185.9), 40W-0L both baselines -- a clear,
+    genuine win, and the first successful "add something earlier" change after six failed
+    "add something new later" attempts. Confirms the staged-buildup assumption itself, not any
+    single crop/land/cash parameter, was the actual bottleneck for this lever.
     replay, sampled only at hour 0 each day, misleadingly showed 0 hands every single day —
     turns out hire contracts expire and must be re-bought every day at hour 0, so hour-0 is
     always mid-reset. Sampling any other hour shows them actually scaling 4→12 hands over the
